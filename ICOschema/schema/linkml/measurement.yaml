@@ -1,0 +1,223 @@
+name: measurement
+id: measurement_schema
+version: 0.0.1
+description: >-
+  Schema for a complete measurement.
+imports:
+  - linkml:types
+prefixes:
+  measurement: https://example.org/measurement/
+  linkml: https://w3id.org/linkml/
+default_prefix: measurement
+default_range: string
+
+classes:
+  MeasurementMetadata:
+    description: >-
+      Metadata for a measurement.
+    attributes:
+      start_time:
+        range: string
+        description: >-
+          Timestamp since UNIX epoch in ISO 8601 format without timezone.
+
+  HardwareMetadata:
+    description: >-
+      Metadata containing information about the hardware used to perform the measurement.
+    attributes:
+      revision:
+      adc_reference_voltage:
+      channel1_metadata:
+        range: ChannelMetadata
+        required: true
+        description: >-
+          Sensor/conversion metadata for MeasurementData.channel1.
+      channel2_metadata:
+        range: ChannelMetadata
+        description: >-
+          Sensor/conversion metadata for MeasurementData.channel2, if present.
+      channel3_metadata:
+        range: ChannelMetadata
+        description: >-
+          Sensor/conversion metadata for MeasurementData.channel3, if present.
+
+  ChannelMetadata:
+    description: >-
+      Metadata describing a single sensor channel: which physical Sensor
+      produced it, and the compensations to apply to its raw MeasurementData
+      values to obtain a value in sensor.unit.
+    attributes:
+      sensor:
+        range: Sensor
+        required: true
+        description: >-
+          The physical sensor that produced this channel's data.
+      compensations:
+        range: Compensation
+        multivalued: true
+        required: true
+        description: >-
+          The compensations to apply to this channel's raw MeasurementData
+          values, applied in ascending order of each entry's `order` field.
+
+  Sensor:
+    description: >-
+      A physical sensor device that can produce channel data.
+    attributes:
+      sensor_id:
+        range: string
+        description: >-
+          Unique identifier of this sensor instance.
+      sensor_type:
+        range: string
+        description: >-
+          Sensor model/part number (e.g. "ADXL1001").
+      name:
+        range: string
+        description: >-
+          Human-readable label for the sensor.
+      unit:
+        range: string
+        description: >-
+          Physical unit the sensor measures in (e.g. "g", "V", "Pa").
+      dimension:
+        range: string
+        description: >-
+          Physical dimension/quantity measured (e.g. "acceleration", "voltage", "pressure").
+      phys_min:
+        range: float
+        description: >-
+          Minimum physical value the sensor can measure, in `unit`.
+      phys_max:
+        range: float
+        description: >-
+          Maximum physical value the sensor can measure, in `unit`.
+      volt_min:
+        range: float
+        description: >-
+          Raw voltage corresponding to phys_min.
+      volt_max:
+        range: float
+        description: >-
+          Raw voltage corresponding to phys_max.
+
+  Compensation:
+    abstract: true
+    description: >-
+      A single compensation/correction step applied to a channel's raw
+      MeasurementData values. A channel can have several compensations of
+      different kinds (e.g. a time-domain Conversion and a
+      FrequencyCompensation); `order` records the sequence they were applied
+      in.
+    attributes:
+      order:
+        range: integer
+        required: true
+        description: >-
+          Position of this compensation in the sequence of compensations
+          applied to the channel's data, ascending (0 = applied first).
+
+  Conversion:
+    is_a: Compensation
+    abstract: true
+    description: >-
+      A time-domain conversion of a channel's raw MeasurementData values into
+      the physical unit of its associated Sensor. Concrete conversions are
+      represented by subclasses, each declaring the parameters its kind of
+      conversion needs.
+
+  NoConversion:
+    is_a: Conversion
+    description: >-
+      No conversion is applied; values are raw ADC values.
+
+  LinearConversion:
+    is_a: Conversion
+    description: >-
+      A linear conversion: converted = raw * gain + offset.
+    attributes:
+      gain:
+        range: float
+        required: true
+        description: >-
+          Multiplicative factor.
+      offset:
+        range: float
+        required: true
+        description: >-
+          Additive offset.
+
+  PolynomialConversion:
+    is_a: Conversion
+    description: >-
+      A polynomial conversion: converted = sum(coefficients[i] * raw**i for i
+      in range(len(coefficients))), i.e. coefficients are ordered from the
+      constant term upward.
+    attributes:
+      coefficients:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          Polynomial coefficients, ordered from the constant term upward.
+
+  FrequencyCompensation:
+    is_a: Compensation
+    abstract: true
+    description: >-
+      A frequency-domain compensation applied to a channel's data (e.g.
+      filtering or a frequency-response correction). Concrete compensations
+      are represented by subclasses; none are defined yet.
+
+  MeasurementData:
+    description: >-
+      Columnar data from a measurement. Each attribute is an array of per-sample
+      values; arrays are aligned by index (the i-th entry of every column
+      belongs to the same sample), regardless of how a given adapter stores or
+      retrieves them (e.g. an HDF5 table with one column per attribute, or a
+      database query result assembled into these arrays).
+    attributes:
+      timestamp:
+        range: integer
+        multivalued: true
+        required: true
+        description: >-
+          Per-sample timestamps, in microseconds since MeasurementMetadata.start_time.
+      counter:
+        range: integer
+        multivalued: true
+        required: true
+        description: >-
+          Per-sample packet counter values, used to detect lost packets.
+      channel1:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          Sensor channel 1 data.
+      channel2:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          Sensor channel 2 data.
+      channel3:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          Sensor channel 3 data.
+
+  Measurement:
+    description: >-
+      A measurement.
+    attributes:
+      hardware_metadata:
+        range: HardwareMetadata
+        required: true
+      measurement_metadata:
+        range: MeasurementMetadata
+        required: true
+      measurement_data:
+        range: MeasurementData
+        required: true
