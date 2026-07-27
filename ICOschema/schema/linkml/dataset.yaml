@@ -1,20 +1,21 @@
-name: measurement
-id: measurement_schema
+name: dataset
+id: dataset_schema
 version: 0.0.1
 description: >-
-  Schema for a complete measurement.
+  Schema for a recording, its derived computations, and the bundle that
+  combines them.
 imports:
   - linkml:types
 prefixes:
-  measurement: https://example.org/measurement/
+  dataset: https://example.org/dataset/
   linkml: https://w3id.org/linkml/
-default_prefix: measurement
+default_prefix: dataset
 default_range: string
 
 classes:
-  MeasurementMetadata:
+  RecordingMetadata:
     description: >-
-      Metadata for a measurement.
+      Metadata for a recording.
     attributes:
       start_time:
         range: string
@@ -23,7 +24,7 @@ classes:
 
   HardwareMetadata:
     description: >-
-      Metadata containing information about the hardware used to perform the measurement.
+      Metadata containing information about the hardware used to perform the recording.
     attributes:
       revision:
       adc_reference_voltage:
@@ -31,20 +32,20 @@ classes:
         range: ChannelMetadata
         required: true
         description: >-
-          Sensor/conversion metadata for MeasurementData.channel1.
+          Sensor/conversion metadata for RecordingData.channel1.
       channel2_metadata:
         range: ChannelMetadata
         description: >-
-          Sensor/conversion metadata for MeasurementData.channel2, if present.
+          Sensor/conversion metadata for RecordingData.channel2, if present.
       channel3_metadata:
         range: ChannelMetadata
         description: >-
-          Sensor/conversion metadata for MeasurementData.channel3, if present.
+          Sensor/conversion metadata for RecordingData.channel3, if present.
 
   ChannelMetadata:
     description: >-
       Metadata describing a single sensor channel: which physical Sensor
-      produced it, and the compensations to apply to its raw MeasurementData
+      produced it, and the compensations to apply to its raw RecordingData
       values to obtain a value in sensor.unit.
     attributes:
       sensor:
@@ -57,7 +58,7 @@ classes:
         multivalued: true
         required: true
         description: >-
-          The compensations to apply to this channel's raw MeasurementData
+          The compensations to apply to this channel's raw RecordingData
           values, applied in ascending order of each entry's `order` field.
 
   Sensor:
@@ -105,7 +106,7 @@ classes:
     abstract: true
     description: >-
       A single compensation/correction step applied to a channel's raw
-      MeasurementData values. A channel can have several compensations of
+      RecordingData values. A channel can have several compensations of
       different kinds (e.g. a time-domain Conversion and a
       FrequencyCompensation); `order` records the sequence they were applied
       in.
@@ -121,7 +122,7 @@ classes:
     is_a: Compensation
     abstract: true
     description: >-
-      A time-domain conversion of a channel's raw MeasurementData values into
+      A time-domain conversion of a channel's raw RecordingData values into
       the physical unit of its associated Sensor. Concrete conversions are
       represented by subclasses, each declaring the parameters its kind of
       conversion needs.
@@ -169,9 +170,9 @@ classes:
       filtering or a frequency-response correction). Concrete compensations
       are represented by subclasses; none are defined yet.
 
-  MeasurementData:
+  RecordingData:
     description: >-
-      Columnar data from a measurement. Each attribute is an array of per-sample
+      Columnar data from a recording. Each attribute is an array of per-sample
       values; arrays are aligned by index (the i-th entry of every column
       belongs to the same sample), regardless of how a given adapter stores or
       retrieves them (e.g. an HDF5 table with one column per attribute, or a
@@ -182,7 +183,7 @@ classes:
         multivalued: true
         required: true
         description: >-
-          Per-sample timestamps, in microseconds since MeasurementMetadata.start_time.
+          Per-sample timestamps, in microseconds since RecordingMetadata.start_time.
       counter:
         range: integer
         multivalued: true
@@ -208,16 +209,88 @@ classes:
         description: >-
           Sensor channel 3 data.
 
-  Measurement:
+  Recording:
     description: >-
-      A measurement.
+      A complete recording: hardware/metadata plus per-sample sensor data.
     attributes:
       hardware_metadata:
         range: HardwareMetadata
         required: true
-      measurement_metadata:
-        range: MeasurementMetadata
+      recording_metadata:
+        range: RecordingMetadata
         required: true
-      measurement_data:
-        range: MeasurementData
+      recording_data:
+        range: RecordingData
         required: true
+
+  DerivedDataset:
+    description: >-
+      One named, computed array derived from a Recording, plus the
+      description of how it was produced.
+    attributes:
+      key:
+        range: string
+        identifier: true
+        description: >-
+          Hierarchical, path-like key identifying this computation within
+          its DatasetBundle (e.g. "wavelet_coefficients/channel1/details").
+          Assigned by the producing engine, never authored by hand.
+      values:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          The computed array's values, flattened. The LinkML/Python level
+          has no native N-D array type; the on-disk (HDF5) representation
+          stores this in its true native shape instead.
+      shape:
+        range: integer
+        multivalued: true
+        required: true
+        description: >-
+          The array's true N-D shape, e.g. [2, 4096] -- needed to
+          reconstruct the array from the flattened `values`.
+      dtype:
+        range: string
+        required: true
+        description: >-
+          The array's numpy dtype name (e.g. "float64").
+      unit:
+        range: string
+        description: >-
+          Physical unit of the computed values, if applicable.
+      produced_by:
+        range: string
+        description: >-
+          Free-text identifying the algorithm that produced this dataset
+          (e.g. "wavelet_transform@1.0.0") -- not a hard reference to any
+          particular registry.
+      produced_at:
+        range: string
+        description: >-
+          Timestamp since UNIX epoch in ISO 8601 format without timezone,
+          recording when this dataset was produced.
+      params:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) algorithm parameters used to produce
+          this dataset.
+      description:
+        range: string
+        description: >-
+          Free-text description of this computation.
+
+  DatasetBundle:
+    description: >-
+      A Recording together with every DerivedDataset computed from it.
+    attributes:
+      recording:
+        range: Recording
+        required: true
+      computations:
+        range: DerivedDataset
+        multivalued: true
+        inlined: true
+        description: >-
+          Every DerivedDataset computed from `recording`, keyed by
+          DerivedDataset.key.
