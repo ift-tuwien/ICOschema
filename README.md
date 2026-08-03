@@ -20,7 +20,7 @@ bundle.to_hdf5("some_file.hdf5")
 **Inspect a recording without loading a full DataFrame:**
 ```python
 recording = Recording.from_hdf5("some_file.hdf5")
-print(recording.signal_loss_percentage)   # dropped-packet % from counter gaps
+print(recording.signal_loss_percentage)   
 print(recording.summary())                # JSON-encodable dict: per-channel min/max/mean/std, sensor info
 ```
 
@@ -44,14 +44,14 @@ bundle.to_hdf5("processed_file.hdf5")
 **Replace a recording after cleanup, keeping existing computations:**
 ```python
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")
-filled = fill_dropped_packets(bundle.recording)   # your own dataloss-fill logic
+filled = fill_dropped_packets(bundle.recording)   # some dataloss fill logic
 bundle = bundle.with_recording(filled)
 bundle.to_hdf5("some_file.hdf5")
 ```
 
 ## Development
 
-Regenerate the Python dataclasses after editing the schema (see `CLAUDE.md` for a PowerShell encoding caveat):
+Regenerate the Python dataclasses after editing the schema:
 
 ```
 uv run gen-python .\ICOschema\schema\linkml\dataset.yaml > .\ICOschema\schema\generated\python\dataset.py
