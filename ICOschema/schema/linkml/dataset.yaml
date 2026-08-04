@@ -44,7 +44,7 @@ classes:
 
   ChannelMetadata:
     description: >-
-      Metadata describing a single sensor channel: which physical Sensor
+      Metadata describing a single sensor channel: which physical sensor
       produced it, and the compensations to apply to its raw RecordingData
       values to obtain a value in sensor.unit.
     attributes:
