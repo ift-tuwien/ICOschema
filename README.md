@@ -11,6 +11,12 @@ uv sync --all-extras
 
 ## Usage
 
+**Note:** In the example below we assume you installed Matplotlib:
+
+```sh
+uv pip install matplotlib
+```
+
 Other codebases should only import `Recording`/`DatasetBundle` from the top-level package:
 
 ```python
@@ -18,9 +24,10 @@ from ICOschema import Recording, DatasetBundle
 
 import matplotlib.pyplot as plt
 
-recording = Recording.from_hdf5("some_file.hdf5")
+recording = Recording.from_hdf5("test/test_with_sensors.hdf5")
 df = recording.to_dataframe()
 plt.plot(recording.timestamps, recording.channel1)
+plt.show()
 recording.to_hdf5("some_file.hdf5")
 
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")  # recording + any DerivedDataset computations
