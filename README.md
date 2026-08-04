@@ -1,6 +1,17 @@
 # ICOschema
 
-Backend-agnostic data model for sensor/hardware recordings and their derived computations. Other codebases should only import `Recording`/`DatasetBundle` from the top-level package:
+Backend-agnostic data model for sensor/hardware recordings and their derived computations.
+
+## Install
+
+```sh
+uv venv --allow-existing
+uv sync --all-extras
+```
+
+## Usage
+
+Other codebases should only import `Recording`/`DatasetBundle` from the top-level package:
 
 ```python
 from ICOschema import Recording, DatasetBundle
@@ -17,7 +28,7 @@ bundle = bundle.with_computation("wavelet_coefficients/channel1/details", derive
 bundle.to_hdf5("some_file.hdf5")
 ```
 
-## Example use cases
+### Example use cases
 
 **Inspect a recording without loading a full DataFrame:**
 
