@@ -31,6 +31,9 @@ plt.show()
 recording.to_hdf5("some_file.hdf5")
 
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")  # recording + any DerivedDataset computations
+# Note: The code below does not work, since `derived` is not defined
+#       Adding the code for `derived` from the example below will not work,
+#       since then `my_wavelet_transform` is not defined.
 bundle = bundle.with_computation("wavelet_coefficients/channel1/details", derived)
 bundle.to_hdf5("some_file.hdf5")
 ```
