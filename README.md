@@ -5,6 +5,8 @@ Backend-agnostic data model for sensor/hardware recordings and their derived com
 ```python
 from ICOschema import Recording, DatasetBundle
 
+import matplotlib.pyplot as plt
+
 recording = Recording.from_hdf5("some_file.hdf5")
 df = recording.to_dataframe()
 plt.plot(recording.timestamps, recording.channel1)
