@@ -18,13 +18,15 @@ bundle.to_hdf5("some_file.hdf5")
 ## Example use cases
 
 **Inspect a recording without loading a full DataFrame:**
+
 ```python
 recording = Recording.from_hdf5("some_file.hdf5")
-print(recording.signal_loss_percentage)   
+print(recording.signal_loss_percentage)
 print(recording.summary())                # JSON-encodable dict: per-channel min/max/mean/std, sensor info
 ```
 
 **Add a derived computation and persist it alongside the recording:**
+
 ```python
 from ICOschema.schema.generated.python.dataset import DerivedDataset
 
@@ -42,6 +44,7 @@ bundle.to_hdf5("processed_file.hdf5")
 ```
 
 **Replace a recording after cleanup, keeping existing computations:**
+
 ```python
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")
 filled = fill_dropped_packets(bundle.recording)   # some dataloss fill logic
