@@ -185,3 +185,36 @@ classDiagram
 ## Open questions
 
 - All channels in a `RecordingData` share one `timestamp`/`counter` array set, i.e. one sample rate per recording. Mixing sensors with different data rates on different channels isn't representable yet — would likely need a per-channel rate/timestamp instead of one shared pair.
+
+## Development
+
+In the text below we assume that you installed:
+
+- [`just`](https://just.systems)
+- [`uv`](https://docs.astral.sh/uv)
+
+and that you want to release version `<VERSION>` of the package. Please just replace this version number with the version that you want to release (e.g. `0.1.0`).
+
+### Release
+
+1. Change the version number and commit your changes:
+
+   ```sh
+   just release <VERSION>
+   ```
+
+   **Note:** [GitHub Actions](https://github.com/ift-tuwien/ICOschema/actions) will publish a package based on the tagged commit and upload it to [PyPi](https://pypi.org/project/icoschema/).
+
+2. Create a new release [here](https://github.com/ift-tuwien/ICOschema/releases/new)
+   1. Insert the version number `<VERSION>` into the tag field
+   2. For the release title use “Version `<VERSION>`”
+   3. Paste the [release notes](doc/releases) for the lastest release into the main text field
+   4. Click on “Publish Release”
+
+   **Note:** Alternatively you can also use the [`gh`](https://cli.github.com) command:
+
+   ```sh
+   gh release create <VERSION>
+   ```
+
+   to create the release notes.
