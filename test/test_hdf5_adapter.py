@@ -19,8 +19,18 @@ import numpy as np
 import pytest
 from hdf5_helpers import write_v1_file
 
-from ICOschema.schema.generated.python.dataset import DatasetBundle, DerivedDataset, LinearConversion, NoConversion
-from ICOschema.storage.python.hdf5 import load_dataset_bundle, load_recording, save_dataset_bundle, save_recording
+from icoschema.schema.generated.python.dataset import (
+    DatasetBundle,
+    DerivedDataset,
+    LinearConversion,
+    NoConversion,
+)
+from icoschema.storage.python.hdf5 import (
+    load_dataset_bundle,
+    load_recording,
+    save_dataset_bundle,
+    save_recording,
+)
 
 FIXTURE = Path(__file__).resolve().parent / "test_with_sensors.hdf5"
 

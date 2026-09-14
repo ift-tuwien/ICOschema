@@ -11,7 +11,7 @@ whole recording.
 This file should never be imported directly, but rather only from the main
 entrypoint:
 
-    from ICOschema import Recording
+    from icoschema import Recording
 
     recording = Recording.from_hdf5("some_file.hdf5")
     df = recording.to_dataframe()
@@ -33,7 +33,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ICOschema.schema.generated.python import dataset as generated
+from icoschema.schema.generated.python import dataset as generated
 
 
 class Recording(generated.Recording):
@@ -55,7 +55,7 @@ class Recording(generated.Recording):
         `/computations/` group the file may also contain -- use
         ICOschema.DatasetBundle.from_hdf5() to read those too.
         """
-        from ICOschema.storage.python import hdf5
+        from icoschema.storage.python import hdf5
 
         loaded = hdf5.load_recording(path)
         return cls(
@@ -70,7 +70,7 @@ class Recording(generated.Recording):
         See ICOschema.storage.python.hdf5 for the file layout this
         produces.
         """
-        from ICOschema.storage.python import hdf5
+        from icoschema.storage.python import hdf5
 
         hdf5.save_recording(self, path)
 
@@ -149,7 +149,7 @@ class Recording(generated.Recording):
 
         return {
             "start_time": self.recording_metadata.start_time,
-            "sample_count": int(len(self.counter)),
+            "sample_count": len(self.counter),
             "signal_loss_percentage": float(self.signal_loss_percentage),
             "channels": channels,
         }

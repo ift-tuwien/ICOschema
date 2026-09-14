@@ -39,7 +39,7 @@ from typing import Literal
 import h5py
 import numpy as np
 
-from ICOschema.schema.generated.python.dataset import (
+from icoschema.schema.generated.python.dataset import (
     ChannelMetadata,
     DatasetBundle,
     DerivedDataset,

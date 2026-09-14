@@ -11,9 +11,9 @@ import numpy as np
 import pytest
 from hdf5_helpers import write_v1_file
 
-from ICOschema.model.python.dataset_bundle import DatasetBundle
-from ICOschema.model.python.recording import Recording
-from ICOschema.schema.generated.python import dataset as generated
+from icoschema.model.python.dataset_bundle import DatasetBundle
+from icoschema.model.python.recording import Recording
+from icoschema.schema.generated.python import dataset as generated
 
 FIXTURE = Path(__file__).resolve().parent / "test_with_sensors.hdf5"
 

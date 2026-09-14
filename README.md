@@ -20,7 +20,7 @@ uv pip install matplotlib
 Other codebases should only import `Recording`/`DatasetBundle` from the top-level package:
 
 ```python
-from ICOschema import Recording, DatasetBundle
+from icoschema import Recording, DatasetBundle
 
 import matplotlib.pyplot as plt
 
@@ -51,7 +51,7 @@ print(recording.summary())                # JSON-encodable dict: per-channel min
 **Add a derived computation and persist it alongside the recording:**
 
 ```python
-from ICOschema.schema.generated.python.dataset import DerivedDataset
+from icoschema.schema.generated.python.dataset import DerivedDataset
 
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")
 coeffs = my_wavelet_transform(bundle.recording.channel1)

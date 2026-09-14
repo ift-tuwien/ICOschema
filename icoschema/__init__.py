@@ -1,7 +1,7 @@
 """ICOschema: a backend-agnostic data model for sensor/hardware recordings
 and their derived computations.
 
-    from ICOschema import Recording, DatasetBundle
+    from icoschema import Recording, DatasetBundle
 
     recording = Recording.from_hdf5("some_file.hdf5")
     df = recording.to_dataframe()
@@ -16,8 +16,8 @@ ICOschema.model.python.dataset_bundle.DatasetBundle for the full API.
 generated (see ICOschema.schema.generated.python.dataset.DerivedDataset).
 """
 
-from ICOschema.model.python.dataset_bundle import DatasetBundle
-from ICOschema.model.python.recording import Recording
-from ICOschema.schema.generated.python.dataset import DerivedDataset
+from icoschema.model.python.dataset_bundle import DatasetBundle
+from icoschema.model.python.recording import Recording
+from icoschema.schema.generated.python.dataset import DerivedDataset
 
 __all__ = ["DatasetBundle", "DerivedDataset", "Recording"]

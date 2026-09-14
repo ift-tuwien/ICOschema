@@ -6,7 +6,7 @@ of the generated fields (`recording`, `computations`).
 This file should never be imported directly, but rather only from the main
 entrypoint:
 
-    from ICOschema import DatasetBundle
+    from icoschema import DatasetBundle
 
     bundle = DatasetBundle.from_hdf5("some_file.hdf5")
     bundle = bundle.with_computation("wavelet_coefficients/channel1/details", derived)
@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from ICOschema.model.python.recording import Recording
-from ICOschema.schema.generated.python import dataset as generated
-from ICOschema.schema.generated.python.dataset import DerivedDataset
+from icoschema.model.python.recording import Recording
+from icoschema.schema.generated.python import dataset as generated
+from icoschema.schema.generated.python.dataset import DerivedDataset
 
 
 class DatasetBundle(generated.DatasetBundle):
@@ -46,7 +46,7 @@ class DatasetBundle(generated.DatasetBundle):
         pass `on_error="raise"` to fail the whole read instead. See
         ICOschema.storage.python.hdf5 for the accepted file layout.
         """
-        from ICOschema.storage.python import hdf5
+        from icoschema.storage.python import hdf5
 
         loaded = hdf5.load_dataset_bundle(path, on_error=on_error)
         return cls(
@@ -65,7 +65,7 @@ class DatasetBundle(generated.DatasetBundle):
         produces -- each computation is stored in its true N-D shape under
         a `/computations/` group.
         """
-        from ICOschema.storage.python import hdf5
+        from icoschema.storage.python import hdf5
 
         hdf5.save_dataset_bundle(self, path)
 
