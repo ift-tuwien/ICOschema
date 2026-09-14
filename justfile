@@ -5,6 +5,23 @@ set windows-shell := ["pwsh.exe", "-NoLogo", "-Command"]
 
 # -- Recipes -------------------------------------------------------------------
 
+# Setup Python environment
+[group('setup')]
+setup:
+	uv venv --allow-existing
+	uv sync --all-extras
+
+# Check code with various linters
+[group('lint')]
+check: setup
+	uv run ruff check
+
+# Run tests
+[default]
+[group('test')]
+test: check
+	uv run pytest
+
 # Release new package version
 [group('release')]
 [unix]

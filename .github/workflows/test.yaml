@@ -35,10 +35,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Install package
         run: |
           uv venv
           uv sync
 
-      - name: Test code
-        run: uv run pytest
+      - name: Check and test code
+        run: just test
