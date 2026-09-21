@@ -23,3 +23,10 @@ packages = ["icoschema"]
 
 [tool.ruff]
 exclude = ["icoschema/schema/generated"]
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "icoschema.schema.generated.*"
+ignore_errors = true

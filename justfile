@@ -15,6 +15,7 @@ setup:
 [group('lint')]
 check: setup
 	uvx ruff check
+	uvx mypy .
 
 # Run tests
 [default]
