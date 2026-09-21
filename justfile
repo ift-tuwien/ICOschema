@@ -14,7 +14,7 @@ setup:
 # Check code with various linters
 [group('lint')]
 check: setup
-	uv run ruff check
+	uvx ruff check
 
 # Run tests
 [default]
