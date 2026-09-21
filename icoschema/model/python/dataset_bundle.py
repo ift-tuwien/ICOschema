@@ -49,6 +49,8 @@ class DatasetBundle(generated.DatasetBundle):
         from icoschema.storage.python import hdf5
 
         loaded = hdf5.load_dataset_bundle(path, on_error=on_error)
+        assert isinstance(loaded.recording, Recording)
+
         return cls(
             recording=Recording(
                 hardware_metadata=loaded.recording.hardware_metadata,
