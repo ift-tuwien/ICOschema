@@ -208,6 +208,7 @@ def _channel_conversion(channel_metadata: ChannelMetadata | None) -> tuple[bool,
 
 def _sensor_row(channel_metadata: ChannelMetadata, *, scaling_factor: float, offset: float) -> np.ndarray:
     sensor = channel_metadata.sensor
+    assert isinstance(sensor, Sensor)
     row = np.zeros(1, dtype=_SENSOR_DTYPE)
     row["dimension"] = (sensor.dimension or "").encode()
     row["name"] = (sensor.name or "").encode()
