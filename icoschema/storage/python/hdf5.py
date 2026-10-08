@@ -109,7 +109,10 @@ def _load_channel_metadata(sensor_row, already_converted: bool) -> ChannelMetada
                 offset=float(sensor_row["offset"]),
             )
         ]
-    return ChannelMetadata(sensor=_load_sensor(sensor_row), compensations=compensations)
+    return ChannelMetadata(
+        sensor=_load_sensor(sensor_row),
+        compensations=compensations  # type: ignore[arg-type]
+    )
 
 
 def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
