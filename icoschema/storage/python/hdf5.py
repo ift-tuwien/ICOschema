@@ -250,6 +250,7 @@ def _write_recording_table(f: h5py.File, recording: Recording, table_name: str) 
 
     dtype = [("counter", "u1"), ("timestamp", "<u8")] + [(slot, "<f4") for slot, _ in present_channels]
     assert isinstance(data, RecordingData)
+    assert isinstance(data.timestamp, list)
     table = np.zeros(len(data.timestamp), dtype=dtype)
     table["counter"] = data.counter
     table["timestamp"] = data.timestamp
