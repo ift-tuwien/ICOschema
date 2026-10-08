@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import h5py
 import numpy as np
@@ -143,7 +143,7 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
         "timestamp": table["timestamp"].tolist(),
         "counter": table["counter"].tolist(),
     }
-    hardware_metadata_kwargs = {
+    hardware_metadata_kwargs : dict[str, Any] = {
         "adc_reference_voltage": _decode(table_ds.attrs["adc_reference_voltage"]),
     }
     for channel_slot, metadata_slot, column, sensor_row in zip(
