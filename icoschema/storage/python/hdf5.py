@@ -311,6 +311,7 @@ def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "
     with h5py.File(path, "w") as f:
         f.attrs["icoschema_format_version"] = _CURRENT_FORMAT_VERSION
         f.attrs["primary_table"] = table_name
+        assert isinstance(bundle.recording, Recording)
         _write_recording_table(f, bundle.recording, table_name)
 
         if bundle.computations:
