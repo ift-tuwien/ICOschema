@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 from icoschema.schema.generated.python import dataset as generated
-from icoschema.schema.generated.python.dataset import RecordingData
+from icoschema.schema.generated.python.dataset import HardwareMetadata, RecordingData
 
 
 class Recording(generated.Recording):
@@ -132,6 +132,7 @@ class Recording(generated.Recording):
         hand directly to a future web API response.
         """
         channels: dict[str, dict[str, Any]] = {}
+        assert isinstance(self.hardware_metadata, HardwareMetadata)
         channel_metadata = {
             "channel1": self.hardware_metadata.channel1_metadata,
             "channel2": self.hardware_metadata.channel2_metadata,
