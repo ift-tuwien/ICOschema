@@ -316,6 +316,7 @@ def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "
 
         if bundle.computations:
             computations_group = f.create_group(_COMPUTATIONS_GROUP)
+            assert isinstance(bundle.computations, dict)
             for key, derived in bundle.computations.items():
                 _write_derived_dataset(computations_group, key, derived)
 
