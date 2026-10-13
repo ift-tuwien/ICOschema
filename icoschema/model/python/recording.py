@@ -34,6 +34,7 @@ import numpy as np
 import pandas as pd
 
 from icoschema.schema.generated.python import dataset as generated
+from icoschema.schema.generated.python.dataset import RecordingData
 
 
 class Recording(generated.Recording):
@@ -77,26 +78,31 @@ class Recording(generated.Recording):
     @property
     def timestamps(self) -> np.ndarray:
         """recording_data.timestamp as a numpy array (integer microseconds since recording_metadata.start_time)."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.timestamp)
 
     @property
     def channel1(self) -> np.ndarray:
         """recording_data.channel1 as a numpy array. Always present."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.channel1)
 
     @property
     def channel2(self) -> np.ndarray:
         """recording_data.channel2 as a numpy array. Empty if this recording has no second channel."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.channel2)
 
     @property
     def channel3(self) -> np.ndarray:
         """recording_data.channel3 as a numpy array. Empty if this recording has no third channel."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.channel3)
 
     @property
     def counter(self) -> np.ndarray:
         """recording_data.counter as a numpy array (an 8-bit wrapping packet counter)."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.counter, dtype=int)
 
     @property
