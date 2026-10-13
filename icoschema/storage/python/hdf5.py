@@ -43,6 +43,7 @@ from icoschema.schema.generated.python.dataset import (
     ChannelMetadata,
     DatasetBundle,
     DerivedDataset,
+    DerivedDatasetKey,
     HardwareMetadata,
     LinearConversion,
     NoConversion,
@@ -331,7 +332,11 @@ def load_dataset_bundle(path: str, *, on_error: Literal["skip", "raise"] = "skip
     instead.
     """
     recording = load_recording(path)
-    computations: dict[str, DerivedDataset] = {}
+    # The following definition gets rid of a mypy warning about an incorrect
+    # argument to computations. The more reasonable type that was here before
+    # `dict[str, DerivedDataset]` did not work.
+    computations: dict[str | DerivedDatasetKey,
+                       dict[Any, Any] | DerivedDataset] = {}
 
     with h5py.File(path, "r") as f:
         group = f.get(_COMPUTATIONS_GROUP)
