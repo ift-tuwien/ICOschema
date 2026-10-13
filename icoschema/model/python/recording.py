@@ -34,7 +34,11 @@ import numpy as np
 import pandas as pd
 
 from icoschema.schema.generated.python import dataset as generated
-from icoschema.schema.generated.python.dataset import HardwareMetadata, RecordingData
+from icoschema.schema.generated.python.dataset import (
+    ChannelMetadata,
+    HardwareMetadata,
+    RecordingData,
+)
 
 
 class Recording(generated.Recording):
@@ -142,6 +146,7 @@ class Recording(generated.Recording):
             values = getattr(self, name)
             if values.size == 0:
                 continue
+            assert isinstance(metadata, ChannelMetadata)
             sensor = metadata.sensor if metadata is not None else None
             channels[name] = {
                 "sensor_id": sensor.sensor_id if sensor is not None else None,
