@@ -258,7 +258,9 @@ def _write_recording_table(f: h5py.File, recording: Recording, table_name: str) 
         table[channel_slot] = getattr(data, channel_slot)
 
     ds = f.create_dataset(table_name, data=table)
+    assert isinstance(recording.recording_metadata, RecordingMetadata)
     ds.attrs["Start_Time"] = recording.recording_metadata.start_time or ""
+    assert isinstance(hardware, HardwareMetadata)
     ds.attrs["adc_reference_voltage"] = hardware.adc_reference_voltage or ""
     ds.attrs["conversion"] = "true" if (not conversion_flags or conversion_flags == {True}) else "false"
 
