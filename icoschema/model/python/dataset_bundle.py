@@ -25,6 +25,7 @@ from typing import Literal
 from icoschema.model.python.recording import Recording
 from icoschema.schema.generated.python import dataset as generated
 from icoschema.schema.generated.python.dataset import DerivedDataset
+from icoschema.schema.generated.python.dataset import Recording as GeneratedRecording
 
 
 class DatasetBundle(generated.DatasetBundle):
@@ -49,7 +50,7 @@ class DatasetBundle(generated.DatasetBundle):
         from icoschema.storage.python import hdf5
 
         loaded: DatasetBundle = hdf5.load_dataset_bundle(path, on_error=on_error)
-        assert isinstance(loaded.recording, Recording)
+        assert isinstance(loaded.recording, GeneratedRecording), f"Type of loaded.recording is {type(loaded.recording)} instead of “GeneratedRecording“"
         assert loaded.computations is not None
         assert not isinstance(loaded.computations, list)
 
