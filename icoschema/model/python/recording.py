@@ -34,6 +34,13 @@ import numpy as np
 import pandas as pd
 
 from icoschema.schema.generated.python import dataset as generated
+from icoschema.schema.generated.python.dataset import (
+    ChannelMetadata,
+    HardwareMetadata,
+    RecordingData,
+    RecordingMetadata,
+    Sensor,
+)
 
 
 class Recording(generated.Recording):
@@ -77,26 +84,31 @@ class Recording(generated.Recording):
     @property
     def timestamps(self) -> np.ndarray:
         """recording_data.timestamp as a numpy array (integer microseconds since recording_metadata.start_time)."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.timestamp)
 
     @property
     def channel1(self) -> np.ndarray:
         """recording_data.channel1 as a numpy array. Always present."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.channel1)
 
     @property
     def channel2(self) -> np.ndarray:
         """recording_data.channel2 as a numpy array. Empty if this recording has no second channel."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.channel2)
 
     @property
     def channel3(self) -> np.ndarray:
         """recording_data.channel3 as a numpy array. Empty if this recording has no third channel."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.channel3)
 
     @property
     def counter(self) -> np.ndarray:
         """recording_data.counter as a numpy array (an 8-bit wrapping packet counter)."""
+        assert isinstance(self.recording_data, RecordingData)
         return np.asarray(self.recording_data.counter, dtype=int)
 
     @property
@@ -126,6 +138,7 @@ class Recording(generated.Recording):
         hand directly to a future web API response.
         """
         channels: dict[str, dict[str, Any]] = {}
+        assert isinstance(self.hardware_metadata, HardwareMetadata)
         channel_metadata = {
             "channel1": self.hardware_metadata.channel1_metadata,
             "channel2": self.hardware_metadata.channel2_metadata,
@@ -135,7 +148,9 @@ class Recording(generated.Recording):
             values = getattr(self, name)
             if values.size == 0:
                 continue
+            assert isinstance(metadata, ChannelMetadata)
             sensor = metadata.sensor if metadata is not None else None
+            assert isinstance(sensor, Sensor | None)
             channels[name] = {
                 "sensor_id": sensor.sensor_id if sensor is not None else None,
                 "sensor_type": sensor.sensor_type if sensor is not None else None,
@@ -147,6 +162,7 @@ class Recording(generated.Recording):
                 "std": float(np.std(values)),
             }
 
+        assert isinstance(self.recording_metadata, RecordingMetadata)
         return {
             "start_time": self.recording_metadata.start_time,
             "sample_count": len(self.counter),
@@ -161,6 +177,7 @@ class Recording(generated.Recording):
         on Compensation/Conversion.
         """
         data = self.recording_data
+        assert isinstance(data, RecordingData)
         columns = {
             "timestamp": data.timestamp,
             "counter": data.counter,

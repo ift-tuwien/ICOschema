@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import h5py
 import numpy as np
@@ -43,6 +43,7 @@ from icoschema.schema.generated.python.dataset import (
     ChannelMetadata,
     DatasetBundle,
     DerivedDataset,
+    DerivedDatasetKey,
     HardwareMetadata,
     LinearConversion,
     NoConversion,
@@ -109,7 +110,10 @@ def _load_channel_metadata(sensor_row, already_converted: bool) -> ChannelMetada
                 offset=float(sensor_row["offset"]),
             )
         ]
-    return ChannelMetadata(sensor=_load_sensor(sensor_row), compensations=compensations)
+    return ChannelMetadata(
+        sensor=_load_sensor(sensor_row),
+        compensations=compensations  # type: ignore[arg-type]
+    )
 
 
 def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
@@ -140,7 +144,7 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
         "timestamp": table["timestamp"].tolist(),
         "counter": table["counter"].tolist(),
     }
-    hardware_metadata_kwargs = {
+    hardware_metadata_kwargs : dict[str, Any] = {
         "adc_reference_voltage": _decode(table_ds.attrs["adc_reference_voltage"]),
     }
     for channel_slot, metadata_slot, column, sensor_row in zip(
@@ -205,6 +209,7 @@ def _channel_conversion(channel_metadata: ChannelMetadata | None) -> tuple[bool,
 
 def _sensor_row(channel_metadata: ChannelMetadata, *, scaling_factor: float, offset: float) -> np.ndarray:
     sensor = channel_metadata.sensor
+    assert isinstance(sensor, Sensor)
     row = np.zeros(1, dtype=_SENSOR_DTYPE)
     row["dimension"] = (sensor.dimension or "").encode()
     row["name"] = (sensor.name or "").encode()
@@ -245,6 +250,8 @@ def _write_recording_table(f: h5py.File, recording: Recording, table_name: str) 
         )
 
     dtype = [("counter", "u1"), ("timestamp", "<u8")] + [(slot, "<f4") for slot, _ in present_channels]
+    assert isinstance(data, RecordingData)
+    assert isinstance(data.timestamp, list)
     table = np.zeros(len(data.timestamp), dtype=dtype)
     table["counter"] = data.counter
     table["timestamp"] = data.timestamp
@@ -252,7 +259,9 @@ def _write_recording_table(f: h5py.File, recording: Recording, table_name: str) 
         table[channel_slot] = getattr(data, channel_slot)
 
     ds = f.create_dataset(table_name, data=table)
+    assert isinstance(recording.recording_metadata, RecordingMetadata)
     ds.attrs["Start_Time"] = recording.recording_metadata.start_time or ""
+    assert isinstance(hardware, HardwareMetadata)
     ds.attrs["adc_reference_voltage"] = hardware.adc_reference_voltage or ""
     ds.attrs["conversion"] = "true" if (not conversion_flags or conversion_flags == {True}) else "false"
 
@@ -303,11 +312,14 @@ def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "
     with h5py.File(path, "w") as f:
         f.attrs["icoschema_format_version"] = _CURRENT_FORMAT_VERSION
         f.attrs["primary_table"] = table_name
+        assert isinstance(bundle.recording, Recording)
         _write_recording_table(f, bundle.recording, table_name)
 
         if bundle.computations:
             computations_group = f.create_group(_COMPUTATIONS_GROUP)
+            assert isinstance(bundle.computations, dict)
             for key, derived in bundle.computations.items():
+                assert isinstance(derived, DerivedDataset)
                 _write_derived_dataset(computations_group, key, derived)
 
 
@@ -320,7 +332,11 @@ def load_dataset_bundle(path: str, *, on_error: Literal["skip", "raise"] = "skip
     instead.
     """
     recording = load_recording(path)
-    computations: dict[str, DerivedDataset] = {}
+    # The following definition gets rid of a mypy warning about an incorrect
+    # argument to computations. The more reasonable type that was here before
+    # `dict[str, DerivedDataset]` did not work.
+    computations: dict[str | DerivedDatasetKey,
+                       dict[Any, Any] | DerivedDataset] = {}
 
     with h5py.File(path, "r") as f:
         group = f.get(_COMPUTATIONS_GROUP)
