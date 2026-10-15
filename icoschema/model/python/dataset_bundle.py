@@ -48,8 +48,10 @@ class DatasetBundle(generated.DatasetBundle):
         """
         from icoschema.storage.python import hdf5
 
-        loaded = hdf5.load_dataset_bundle(path, on_error=on_error)
+        loaded: DatasetBundle = hdf5.load_dataset_bundle(path, on_error=on_error)
         assert isinstance(loaded.recording, Recording)
+        assert loaded.computations is not None
+        assert not isinstance(loaded.computations, list)
 
         return cls(
             recording=Recording(
@@ -73,10 +75,14 @@ class DatasetBundle(generated.DatasetBundle):
 
     def with_recording(self, recording: Recording) -> DatasetBundle:
         """A copy of this bundle with `recording` replaced (e.g. after dataloss-fill)."""
+        assert self.computations is not None
+        assert not isinstance(self.computations, list)
         return DatasetBundle(recording=recording, computations=dict(self.computations))
 
     def with_computation(self, key: str, derived: DerivedDataset) -> DatasetBundle:
         """A copy of this bundle with one computation added/replaced under `key`."""
+        assert self.computations is not None
+        assert not isinstance(self.computations, list)
         computations = dict(self.computations)
         computations[key] = derived
         return DatasetBundle(recording=self.recording, computations=computations)
