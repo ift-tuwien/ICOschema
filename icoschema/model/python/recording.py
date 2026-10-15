@@ -38,6 +38,8 @@ from icoschema.schema.generated.python.dataset import (
     ChannelMetadata,
     HardwareMetadata,
     RecordingData,
+    RecordingMetadata,
+    Sensor,
 )
 
 
@@ -148,6 +150,7 @@ class Recording(generated.Recording):
                 continue
             assert isinstance(metadata, ChannelMetadata)
             sensor = metadata.sensor if metadata is not None else None
+            assert isinstance(sensor, Sensor | None)
             channels[name] = {
                 "sensor_id": sensor.sensor_id if sensor is not None else None,
                 "sensor_type": sensor.sensor_type if sensor is not None else None,
@@ -159,6 +162,7 @@ class Recording(generated.Recording):
                 "std": float(np.std(values)),
             }
 
+        assert isinstance(self.recording_metadata, RecordingMetadata)
         return {
             "start_time": self.recording_metadata.start_time,
             "sample_count": len(self.counter),
@@ -173,6 +177,7 @@ class Recording(generated.Recording):
         on Compensation/Conversion.
         """
         data = self.recording_data
+        assert isinstance(data, RecordingData)
         columns = {
             "timestamp": data.timestamp,
             "counter": data.counter,
