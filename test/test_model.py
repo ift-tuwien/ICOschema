@@ -89,6 +89,13 @@ def test_signal_loss_percentage_ignores_repeats_and_clean_wraparound():
     assert recording.signal_loss_percentage == pytest.approx(0.0)
 
 
+def test_signal_loss_percentage_counts_packets_not_rows_for_multi_row_packets():
+    # 1-channel layout: 3 rows per packet. 1 -> 4 skips packets 2, 3: 2 lost
+    # out of 3 received packets (9 rows) + 2 lost.
+    recording = _recording_with_counter([0, 0, 0, 1, 1, 1, 4, 4, 4])
+    assert recording.signal_loss_percentage == pytest.approx(2 / (3 + 2) * 100)
+
+
 def test_signal_loss_percentage_counts_plain_gap():
     # 1 -> 5 skips 2, 3, 4: 3 lost out of 3 received + 3 lost.
     recording = _recording_with_counter([0, 1, 5])

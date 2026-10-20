@@ -107,6 +107,13 @@ class Recording(generated.Recording):
         `counter` is an 8-bit counter (wraps 255 -> 0) that increments once per
         packet; a jump of more than 1 between consecutive samples (accounting
         for wraparound) means packets were dropped in between.
+
+        A packet can carry more than one sample row, all sharing one counter
+        value (e.g. 3 rows per packet for a 1-channel recording, 1 for a
+        3-channel one), so received packets are counted as runs of equal
+        consecutive counter values, not as rows -- otherwise lost packets
+        would be divided by received rows and multi-row recordings would
+        under-report their loss.
         """
         counter = self.counter
         gaps = np.diff(counter) - 1
@@ -114,7 +121,7 @@ class Recording(generated.Recording):
         gaps[gaps == -256] = 0  # clean wraparound 255 -> 0
         gaps[gaps < 0] += 256  # wraparound with loss
         total_lost = int(np.sum(gaps))
-        total_received = len(counter)
+        total_received = int(np.count_nonzero(np.diff(counter))) + 1
         return (total_lost / (total_received + total_lost)) * 100
 
     def summary(self) -> dict[str, Any]:
