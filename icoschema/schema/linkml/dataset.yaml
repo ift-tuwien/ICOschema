@@ -1,6 +1,6 @@
 name: dataset
 id: dataset_schema
-version: 0.0.1
+version: 0.0.2
 description: >-
   Schema for a recording, its derived computations, and the bundle that
   combines them.
@@ -21,6 +21,18 @@ classes:
         range: string
         description: >-
           Timestamp since UNIX epoch in ISO 8601 format without timezone.
+      pre_metadata:
+        range: string
+        description: >-
+          Opaque (JSON-encoded) metadata recorded before the measurement
+          (e.g. tool, workpiece and process parameters). Stored and
+          round-tripped as is, never parsed.
+      post_metadata:
+        range: string
+        description: >-
+          Opaque (JSON-encoded) metadata recorded after the measurement
+          (e.g. tool-wear/breakage labels). Stored and round-tripped as is,
+          never parsed.
 
   HardwareMetadata:
     description: >-
@@ -28,6 +40,20 @@ classes:
     attributes:
       revision:
       adc_reference_voltage:
+      adc_prescaler:
+        range: integer
+        description: >-
+          ADC prescaler setting. Together with adc_acquisition_time and
+          adc_oversample_rate it determines the total sampling frequency;
+          either all three are known or none.
+      adc_acquisition_time:
+        range: integer
+        description: >-
+          ADC acquisition time setting (see adc_prescaler).
+      adc_oversample_rate:
+        range: integer
+        description: >-
+          ADC oversample rate setting (see adc_prescaler).
       channel1_metadata:
         range: ChannelMetadata
         required: true
@@ -223,6 +249,69 @@ classes:
         range: RecordingData
         required: true
 
+  PreprocessedRecording:
+    description: >-
+      The raw RecordingData channels placed on the gap-free sample grid
+      (lost packets filled) with timestamps rebased to 1 / sampling
+      frequency. Row j is grid position j, where position 0 is the first
+      received raw row. Channel values are copied from RecordingData as
+      stored, whatever their compensations say: they share the Recording's
+      HardwareMetadata (sensors, compensations) and mean exactly what the raw
+      channels mean.
+    attributes:
+      timestamp:
+        range: integer
+        multivalued: true
+        required: true
+        description: >-
+          Per-row timestamps in microseconds since
+          RecordingMetadata.start_time:
+          first raw timestamp + round(j * 1e6 / channel_sampling_frequency).
+          Never derive the sampling frequency from timestamp differences --
+          use channel_sampling_frequency.
+      channel1:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          RecordingData.channel1 on the gap-free grid.
+      channel2:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          RecordingData.channel2 on the gap-free grid, if present.
+      channel3:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          RecordingData.channel3 on the gap-free grid, if present.
+      channel_sampling_frequency:
+        range: float
+        required: true
+        description: >-
+          Per-channel sampling frequency in Hz (the total ADC rate divided by
+          the number of channels) used to build `timestamp`. Binding for
+          everything time-related computed from this recording.
+      sampling_frequency_source:
+        range: SamplingFrequencySource
+        required: true
+        description: >-
+          Where channel_sampling_frequency came from.
+      fill_method:
+        range: string
+        required: true
+        description: >-
+          How lost samples were filled (e.g. "forward_fill"). The vocabulary
+          is owned by the producer.
+      producer:
+        range: string
+        required: true
+        description: >-
+          Free text identifying what produced this table (e.g.
+          "icocompute@0.2.0").
+
   DerivedDataset:
     description: >-
       One named, computed array derived from a Recording, plus the
@@ -282,11 +371,17 @@ classes:
 
   DatasetBundle:
     description: >-
-      A Recording together with every DerivedDataset computed from it.
+      A Recording together with its optional PreprocessedRecording and every
+      DerivedDataset computed from them.
     attributes:
       recording:
         range: Recording
         required: true
+      preprocessed:
+        range: PreprocessedRecording
+        description: >-
+          `recording` on the gap-free grid with rebased timestamps, if it has
+          been preprocessed.
       computations:
         range: DerivedDataset
         multivalued: true
@@ -294,3 +389,17 @@ classes:
         description: >-
           Every DerivedDataset computed from `recording`, keyed by
           DerivedDataset.key.
+
+enums:
+  SamplingFrequencySource:
+    description: >-
+      Where a per-channel sampling frequency came from.
+    permissible_values:
+      override:
+        description: Given explicitly by whoever produced the data.
+      hardware:
+        description: Computed from the ADC settings recorded in HardwareMetadata.
+      default:
+        description: >-
+          Computed from the default ADC settings, because the recording
+          doesn't record its own.
