@@ -1,6 +1,6 @@
 name: dataset
 id: dataset_schema
-version: 0.0.2
+version: 0.0.3
 description: >-
   Schema for a recording, its derived computations, and the bundle that
   combines them.
@@ -369,10 +369,84 @@ classes:
         description: >-
           Free-text description of this computation.
 
+  ComputationStep:
+    description: >-
+      The record of one computation step that produced (or failed to
+      produce) DerivedDatasets in a bundle: what ran, with which parameters,
+      in which order, and which computations it wrote. Generic provenance --
+      how producers name steps or derive keys from them is up to them.
+    attributes:
+      node:
+        range: string
+        identifier: true
+        description: >-
+          The step's unique name within its bundle. Must be a single HDF5
+          path segment (non-empty, no "/", not starting with ".").
+      step_index:
+        range: integer
+        required: true
+        description: >-
+          Execution order, 0-based and consecutive. Assigned by
+          DatasetBundle.with_step, never by hand.
+      producer:
+        range: string
+        required: true
+        description: >-
+          Free text identifying what ran (e.g. "rms@1.0.0"), like
+          DerivedDataset.produced_by. Its format is owned by the producer.
+      params:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) parameters as requested.
+      resolved_params:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) parameter values actually used, where
+          they differ from or complete `params` (e.g. a resolved default).
+      inputs:
+        range: string
+        multivalued: true
+        description: >-
+          Names of the steps (or other sources) this step read from.
+          Informational.
+      status:
+        range: ComputationStatus
+        description: >-
+          Whether the step succeeded.
+      error:
+        range: string
+        description: >-
+          The error message, for a failed step.
+      summary:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) short summary of the step's result.
+      output_keys:
+        range: string
+        multivalued: true
+        description: >-
+          The DatasetBundle.computations keys this step wrote. Authoritative:
+          it is what links a step to its data.
+      started_at:
+        range: string
+        description: >-
+          Timestamp since UNIX epoch in ISO 8601 format without timezone,
+          when the step started.
+      duration_s:
+        range: float
+        description: >-
+          How long the step ran, in seconds.
+      environment:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) description of the software the step ran
+          with (e.g. library versions).
+
   DatasetBundle:
     description: >-
-      A Recording together with its optional PreprocessedRecording and every
-      DerivedDataset computed from them.
+      A Recording together with its optional PreprocessedRecording, every
+      DerivedDataset computed from them, and the ComputationSteps that
+      produced them.
     attributes:
       recording:
         range: Recording
@@ -389,8 +463,23 @@ classes:
         description: >-
           Every DerivedDataset computed from `recording`, keyed by
           DerivedDataset.key.
+      steps:
+        range: ComputationStep
+        multivalued: true
+        inlined_as_list: true
+        description: >-
+          The steps that produced `computations`, ordered by step_index.
+          Computations no step lists in its output_keys are "unmanaged".
 
 enums:
+  ComputationStatus:
+    description: >-
+      Whether a ComputationStep succeeded.
+    permissible_values:
+      ok:
+        description: The step ran and wrote its output_keys.
+      error:
+        description: The step raised; see ComputationStep.error.
   SamplingFrequencySource:
     description: >-
       Where a per-channel sampling frequency came from.
