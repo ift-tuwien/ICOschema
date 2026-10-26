@@ -1,5 +1,5 @@
 # Auto generated from dataset.yaml by pythongen.py version: 0.0.1
-# Generation date: 2026-10-26T14:52:53
+# Generation date: 2026-10-26T15:40:15
 # Schema: dataset
 #
 # id: dataset_schema
@@ -59,7 +59,7 @@ from rdflib import (
 from linkml_runtime.linkml_model.types import Float, Integer, String
 
 metamodel_version = "1.11.0"
-version = "0.0.2"
+version = "0.0.3"
 
 # Namespaces
 DATASET = CurieNamespace('dataset', 'https://example.org/dataset/')
@@ -71,6 +71,10 @@ DEFAULT_ = DATASET
 
 # Class references
 class DerivedDatasetKey(extended_str):
+    pass
+
+
+class ComputationStepNode(extended_str):
     pass
 
 
@@ -578,9 +582,89 @@ class DerivedDataset(YAMLRoot):
 
 
 @dataclass(repr=False)
+class ComputationStep(YAMLRoot):
+    """
+    The record of one computation step that produced (or failed to produce) DerivedDatasets in a bundle: what ran,
+    with which parameters, in which order, and which computations it wrote. Generic provenance -- how producers name
+    steps or derive keys from them is up to them.
+    """
+    _inherited_slots: ClassVar[list[str]] = []
+
+    class_class_uri: ClassVar[URIRef] = DATASET["ComputationStep"]
+    class_class_curie: ClassVar[str] = "dataset:ComputationStep"
+    class_name: ClassVar[str] = "ComputationStep"
+    class_model_uri: ClassVar[URIRef] = DATASET.ComputationStep
+
+    node: Union[str, ComputationStepNode] = None
+    step_index: int = None
+    producer: str = None
+    params: Optional[str] = None
+    resolved_params: Optional[str] = None
+    inputs: Optional[Union[str, list[str]]] = empty_list()
+    status: Optional[Union[str, "ComputationStatus"]] = None
+    error: Optional[str] = None
+    summary: Optional[str] = None
+    output_keys: Optional[Union[str, list[str]]] = empty_list()
+    started_at: Optional[str] = None
+    duration_s: Optional[float] = None
+    environment: Optional[str] = None
+
+    def __post_init__(self, *_: str, **kwargs: Any):
+        if self._is_empty(self.node):
+            self.MissingRequiredField("node")
+        if not isinstance(self.node, ComputationStepNode):
+            self.node = ComputationStepNode(self.node)
+
+        if self._is_empty(self.step_index):
+            self.MissingRequiredField("step_index")
+        if not isinstance(self.step_index, int):
+            self.step_index = int(self.step_index)
+
+        if self._is_empty(self.producer):
+            self.MissingRequiredField("producer")
+        if not isinstance(self.producer, str):
+            self.producer = str(self.producer)
+
+        if self.params is not None and not isinstance(self.params, str):
+            self.params = str(self.params)
+
+        if self.resolved_params is not None and not isinstance(self.resolved_params, str):
+            self.resolved_params = str(self.resolved_params)
+
+        if not isinstance(self.inputs, list):
+            self.inputs = [self.inputs] if self.inputs is not None else []
+        self.inputs = [v if isinstance(v, str) else str(v) for v in self.inputs]
+
+        if self.status is not None and not isinstance(self.status, ComputationStatus):
+            self.status = ComputationStatus(self.status)
+
+        if self.error is not None and not isinstance(self.error, str):
+            self.error = str(self.error)
+
+        if self.summary is not None and not isinstance(self.summary, str):
+            self.summary = str(self.summary)
+
+        if not isinstance(self.output_keys, list):
+            self.output_keys = [self.output_keys] if self.output_keys is not None else []
+        self.output_keys = [v if isinstance(v, str) else str(v) for v in self.output_keys]
+
+        if self.started_at is not None and not isinstance(self.started_at, str):
+            self.started_at = str(self.started_at)
+
+        if self.duration_s is not None and not isinstance(self.duration_s, float):
+            self.duration_s = float(self.duration_s)
+
+        if self.environment is not None and not isinstance(self.environment, str):
+            self.environment = str(self.environment)
+
+        super().__post_init__(**kwargs)
+
+
+@dataclass(repr=False)
 class DatasetBundle(YAMLRoot):
     """
-    A Recording together with its optional PreprocessedRecording and every DerivedDataset computed from them.
+    A Recording together with its optional PreprocessedRecording, every DerivedDataset computed from them, and the
+    ComputationSteps that produced them.
     """
     _inherited_slots: ClassVar[list[str]] = []
 
@@ -592,6 +676,7 @@ class DatasetBundle(YAMLRoot):
     recording: Union[dict, Recording] = None
     preprocessed: Optional[Union[dict, PreprocessedRecording]] = None
     computations: Optional[Union[dict[Union[str, DerivedDatasetKey], Union[dict, DerivedDataset]], list[Union[dict, DerivedDataset]]]] = empty_dict()
+    steps: Optional[Union[dict[Union[str, ComputationStepNode], Union[dict, ComputationStep]], list[Union[dict, ComputationStep]]]] = empty_dict()
 
     def __post_init__(self, *_: str, **kwargs: Any):
         if self._is_empty(self.recording):
@@ -604,10 +689,28 @@ class DatasetBundle(YAMLRoot):
 
         self._normalize_inlined_as_dict(slot_name="computations", slot_type=DerivedDataset, key_name="key", keyed=True)
 
+        self._normalize_inlined_as_list(slot_name="steps", slot_type=ComputationStep, key_name="node", keyed=True)
+
         super().__post_init__(**kwargs)
 
 
 # Enumerations
+class ComputationStatus(EnumDefinitionImpl):
+    """
+    Whether a ComputationStep succeeded.
+    """
+    ok = PermissibleValue(
+        text="ok",
+        description="The step ran and wrote its output_keys.")
+    error = PermissibleValue(
+        text="error",
+        description="The step raised; see ComputationStep.error.")
+
+    _defn = EnumDefinition(
+        name="ComputationStatus",
+        description="Whether a ComputationStep succeeded.",
+    )
+
 class SamplingFrequencySource(EnumDefinitionImpl):
     """
     Where a per-channel sampling frequency came from.
@@ -784,6 +887,45 @@ slots.derivedDataset__params = Slot(uri=DATASET.params, name="derivedDataset__pa
 slots.derivedDataset__description = Slot(uri=DATASET.description, name="derivedDataset__description", curie=DATASET.curie('description'),
                    model_uri=DATASET.derivedDataset__description, domain=None, range=Optional[str])
 
+slots.computationStep__node = Slot(uri=DATASET.node, name="computationStep__node", curie=DATASET.curie('node'),
+                   model_uri=DATASET.computationStep__node, domain=None, range=URIRef)
+
+slots.computationStep__step_index = Slot(uri=DATASET.step_index, name="computationStep__step_index", curie=DATASET.curie('step_index'),
+                   model_uri=DATASET.computationStep__step_index, domain=None, range=int)
+
+slots.computationStep__producer = Slot(uri=DATASET.producer, name="computationStep__producer", curie=DATASET.curie('producer'),
+                   model_uri=DATASET.computationStep__producer, domain=None, range=str)
+
+slots.computationStep__params = Slot(uri=DATASET.params, name="computationStep__params", curie=DATASET.curie('params'),
+                   model_uri=DATASET.computationStep__params, domain=None, range=Optional[str])
+
+slots.computationStep__resolved_params = Slot(uri=DATASET.resolved_params, name="computationStep__resolved_params", curie=DATASET.curie('resolved_params'),
+                   model_uri=DATASET.computationStep__resolved_params, domain=None, range=Optional[str])
+
+slots.computationStep__inputs = Slot(uri=DATASET.inputs, name="computationStep__inputs", curie=DATASET.curie('inputs'),
+                   model_uri=DATASET.computationStep__inputs, domain=None, range=Optional[Union[str, list[str]]])
+
+slots.computationStep__status = Slot(uri=DATASET.status, name="computationStep__status", curie=DATASET.curie('status'),
+                   model_uri=DATASET.computationStep__status, domain=None, range=Optional[Union[str, "ComputationStatus"]])
+
+slots.computationStep__error = Slot(uri=DATASET.error, name="computationStep__error", curie=DATASET.curie('error'),
+                   model_uri=DATASET.computationStep__error, domain=None, range=Optional[str])
+
+slots.computationStep__summary = Slot(uri=DATASET.summary, name="computationStep__summary", curie=DATASET.curie('summary'),
+                   model_uri=DATASET.computationStep__summary, domain=None, range=Optional[str])
+
+slots.computationStep__output_keys = Slot(uri=DATASET.output_keys, name="computationStep__output_keys", curie=DATASET.curie('output_keys'),
+                   model_uri=DATASET.computationStep__output_keys, domain=None, range=Optional[Union[str, list[str]]])
+
+slots.computationStep__started_at = Slot(uri=DATASET.started_at, name="computationStep__started_at", curie=DATASET.curie('started_at'),
+                   model_uri=DATASET.computationStep__started_at, domain=None, range=Optional[str])
+
+slots.computationStep__duration_s = Slot(uri=DATASET.duration_s, name="computationStep__duration_s", curie=DATASET.curie('duration_s'),
+                   model_uri=DATASET.computationStep__duration_s, domain=None, range=Optional[float])
+
+slots.computationStep__environment = Slot(uri=DATASET.environment, name="computationStep__environment", curie=DATASET.curie('environment'),
+                   model_uri=DATASET.computationStep__environment, domain=None, range=Optional[str])
+
 slots.datasetBundle__recording = Slot(uri=DATASET.recording, name="datasetBundle__recording", curie=DATASET.curie('recording'),
                    model_uri=DATASET.datasetBundle__recording, domain=None, range=Union[dict, Recording])
 
@@ -792,4 +934,7 @@ slots.datasetBundle__preprocessed = Slot(uri=DATASET.preprocessed, name="dataset
 
 slots.datasetBundle__computations = Slot(uri=DATASET.computations, name="datasetBundle__computations", curie=DATASET.curie('computations'),
                    model_uri=DATASET.datasetBundle__computations, domain=None, range=Optional[Union[dict[Union[str, DerivedDatasetKey], Union[dict, DerivedDataset]], list[Union[dict, DerivedDataset]]]])
+
+slots.datasetBundle__steps = Slot(uri=DATASET.steps, name="datasetBundle__steps", curie=DATASET.curie('steps'),
+                   model_uri=DATASET.datasetBundle__steps, domain=None, range=Optional[Union[dict[Union[str, ComputationStepNode], Union[dict, ComputationStep]], list[Union[dict, ComputationStep]]]])
 

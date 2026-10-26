@@ -1,8 +1,9 @@
 """The public API for a `DatasetBundle`: a `Recording`, its optional
-`PreprocessedRecording`, and every `DerivedDataset` computed from them (see
-ICOschema/schema/generated/python). Adds loading from / writing to storage,
-validation and immutable-update helpers on top of the generated fields
-(`recording`, `preprocessed`, `computations`).
+`PreprocessedRecording`, every `DerivedDataset` computed from them, and the
+`ComputationStep`s that produced those (see ICOschema/schema/generated/python).
+Adds loading from / writing to storage, validation and immutable-update
+helpers on top of the generated fields (`recording`, `preprocessed`,
+`computations`, `steps`).
 
 This file should never be imported directly, but rather only from the main
 entrypoint:
@@ -21,26 +22,31 @@ generated, used directly via
 
 from __future__ import annotations
 
+import dataclasses
 import math
-from typing import Literal
+from collections.abc import Iterable
+from typing import Literal, cast
 
 from icoschema.model.python.preprocessed_recording import PreprocessedRecording
 from icoschema.model.python.recording import Recording
 from icoschema.schema.generated.python import dataset as generated
-from icoschema.schema.generated.python.dataset import DerivedDataset
+from icoschema.schema.generated.python.dataset import ComputationStep, DerivedDataset
 
 _CHANNELS = ("channel1", "channel2", "channel3")
 
 
 class DatasetBundle(generated.DatasetBundle):
-    """A Recording, its optional PreprocessedRecording, and every
-    DerivedDataset computed from them.
+    """A Recording, its optional PreprocessedRecording, every DerivedDataset
+    computed from them, and the ComputationSteps that produced those.
 
     Has every field of `ICOschema.schema.generated.python.dataset.DatasetBundle`
-    (`recording`, `preprocessed`, `computations`), plus the loading/writing
-    and immutable-update methods defined below. Construct via a `from_XXX`
-    classmethod (e.g. `from_hdf5`) rather than the bare constructor when
-    loading from storage.
+    (`recording`, `preprocessed`, `computations`, `steps`), plus the
+    loading/writing and immutable-update methods defined below. Construct via
+    a `from_XXX` classmethod (e.g. `from_hdf5`) rather than the bare
+    constructor when loading from storage.
+
+    `steps` is a list ordered by `step_index` (0, 1, 2, ...). Add steps only
+    through `with_step`, which assigns the index and validates the step.
     """
 
     @classmethod
@@ -61,6 +67,7 @@ class DatasetBundle(generated.DatasetBundle):
         bundle = cls(
             recording=_as_model_recording(loaded.recording),
             computations=dict(loaded.computations),
+            steps=list(loaded.steps),
         )
         if loaded.preprocessed is not None:
             bundle = bundle.with_preprocessed(loaded.preprocessed)
@@ -79,19 +86,26 @@ class DatasetBundle(generated.DatasetBundle):
 
         if self.preprocessed is not None:
             validate_preprocessed(_as_model_recording(self.recording), self.preprocessed)
+        validate_steps(self._steps(), self.computations)
         hdf5.save_dataset_bundle(self, path)
 
     def with_recording(self, recording: Recording) -> DatasetBundle:
         """A copy of this bundle with `recording` replaced.
 
-        Raises `ValueError` while the bundle has a `preprocessed` table,
-        which was built from the current recording and would silently go
-        stale -- drop it first with `without_preprocessed()`.
+        Raises `ValueError` while the bundle has a `preprocessed` table or
+        any `steps`, which were built from the current recording and would
+        silently go stale -- drop them first (`without_preprocessed()`,
+        `without_steps(...)`).
         """
         if self.preprocessed is not None:
             raise ValueError(
                 "cannot replace the recording of a bundle with a preprocessed table "
                 "(it was built from the current recording) -- call without_preprocessed() first"
+            )
+        if self.steps:
+            raise ValueError(
+                "cannot replace the recording of a bundle with computation steps "
+                "(they were computed from the current recording) -- call without_steps() first"
             )
         return DatasetBundle(recording=recording, computations=dict(self.computations))
 
@@ -105,18 +119,84 @@ class DatasetBundle(generated.DatasetBundle):
         model_preprocessed = _as_model_preprocessed(preprocessed)
         validate_preprocessed(recording, model_preprocessed)
         return DatasetBundle(
-            recording=recording, preprocessed=model_preprocessed, computations=dict(self.computations)
+            recording=recording,
+            preprocessed=model_preprocessed,
+            computations=dict(self.computations),
+            steps=list(self._steps()),
         )
 
     def without_preprocessed(self) -> DatasetBundle:
-        """A copy of this bundle without a `preprocessed` table."""
-        return DatasetBundle(recording=self.recording, computations=dict(self.computations))
+        """A copy of this bundle without a `preprocessed` table (steps and
+        computations are kept -- dropping what was computed from the table is
+        up to the caller)."""
+        return DatasetBundle(recording=self.recording, computations=dict(self.computations), steps=list(self._steps()))
 
     def with_computation(self, key: str, derived: DerivedDataset) -> DatasetBundle:
         """A copy of this bundle with one computation added/replaced under `key`."""
         computations = dict(self.computations)
         computations[key] = derived
-        return DatasetBundle(recording=self.recording, preprocessed=self.preprocessed, computations=computations)
+        return DatasetBundle(
+            recording=self.recording,
+            preprocessed=self.preprocessed,
+            computations=computations,
+            steps=list(self._steps()),
+        )
+
+    def with_step(self, step: ComputationStep) -> DatasetBundle:
+        """A copy of this bundle with `step` appended as the last step.
+
+        `step.step_index` is assigned here (`len(steps)`); whatever it was is
+        overwritten. Raises `ValueError` if `step.node` is already taken or
+        isn't a single HDF5 path segment, or if an `output_keys` entry isn't
+        in `computations` -- add the step's computations first.
+        """
+        appended = dataclasses.replace(step, step_index=len(self.steps))
+        steps = [*self._steps(), appended]
+        validate_steps(steps, self.computations)
+        return DatasetBundle(
+            recording=self.recording,
+            preprocessed=self.preprocessed,
+            computations=dict(self.computations),
+            steps=steps,
+        )
+
+    def without_steps(self, nodes: Iterable[str]) -> DatasetBundle:
+        """A copy of this bundle without the steps named `nodes` and the
+        computations they list in `output_keys`. The remaining steps keep
+        their order and are renumbered 0, 1, 2, ... Nothing else is dropped:
+        what depends on a removed step is up to the caller. Raises
+        `ValueError` for an unknown node."""
+        nodes = set(nodes)
+        unknown = nodes - {step.node for step in self._steps()}
+        if unknown:
+            raise ValueError(f"no such step(s): {sorted(unknown)}")
+        removed_keys = {key for step in self._steps() if step.node in nodes for key in step.output_keys}
+        kept = [step for step in self._steps() if step.node not in nodes]
+        return DatasetBundle(
+            recording=self.recording,
+            preprocessed=self.preprocessed,
+            computations={k: v for k, v in self.computations.items() if k not in removed_keys},
+            steps=[dataclasses.replace(step, step_index=i) for i, step in enumerate(kept)],
+        )
+
+    def computations_of(self, node: str) -> dict[str, DerivedDataset]:
+        """The computations step `node` wrote (its `output_keys`), by key.
+        Raises `ValueError` for an unknown node."""
+        for step in self._steps():
+            if step.node == node:
+                return {key: self.computations[key] for key in step.output_keys}
+        raise ValueError(f"no such step: {node!r}")
+
+    def unmanaged_keys(self) -> set[str]:
+        """Computation keys no step lists in its `output_keys` (e.g. from
+        older files or code that adds computations without recording a step)."""
+        managed = {key for step in self._steps() for key in step.output_keys}
+        return set(self.computations) - managed
+
+    def _steps(self) -> list[ComputationStep]:
+        """`steps`, typed: the generated field also admits dict/str forms
+        before `__post_init__` normalizes it to a list."""
+        return cast(list[ComputationStep], self.steps)
 
 
 def validate_preprocessed(recording: Recording, preprocessed: generated.PreprocessedRecording) -> None:
@@ -140,6 +220,25 @@ def validate_preprocessed(recording: Recording, preprocessed: generated.Preproce
     frequency = preprocessed.channel_sampling_frequency
     if not (math.isfinite(frequency) and frequency > 0):
         raise ValueError(f"preprocessed channel_sampling_frequency must be positive and finite, got {frequency}")
+
+
+def validate_steps(steps: list[ComputationStep], computations: dict[str, DerivedDataset]) -> None:
+    """Raises `ValueError` unless `steps` are numbered 0, 1, 2, ... in order,
+    every node name is unique and a single HDF5 path segment, and every
+    `output_keys` entry is in `computations`."""
+    seen: set[str] = set()
+    for position, step in enumerate(steps):
+        node = str(step.node)
+        if not node or "/" in node or node.startswith("."):
+            raise ValueError(f"step name {node!r} must be non-empty, contain no '/' and not start with '.'")
+        if node in seen:
+            raise ValueError(f"duplicate step name {node!r}")
+        seen.add(node)
+        if step.step_index != position:
+            raise ValueError(f"step {node!r} has step_index {step.step_index}, expected {position}")
+        missing = [key for key in step.output_keys if key not in computations]
+        if missing:
+            raise ValueError(f"step {node!r} lists output_keys missing from computations: {missing}")
 
 
 def _as_model_recording(recording: generated.Recording) -> Recording:

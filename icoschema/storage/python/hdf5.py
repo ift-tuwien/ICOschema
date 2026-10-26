@@ -10,7 +10,8 @@ Read dispatches on the root-level `icoschema_format_version` attribute:
   Version "1.0" records the primary table's name explicitly (root attribute
   `primary_table`), since it is no longer assumed to be "acceleration".
   Version "1.1" adds an optional preprocessed table, named by the root
-  attribute `preprocessed_table`. Any other version is rejected, so an older
+  attribute `preprocessed_table`. Version "1.2" adds an optional `/steps/`
+  group of ComputationSteps. Any other version is rejected, so an older
   reader never silently drops parts of a newer file.
 
 Every version's primary table has `counter`/`timestamp` columns plus one to
@@ -28,9 +29,13 @@ channel columns `channel1`..`channel3` (`<f4`), with
 `producer` attributes. It shares the `sensors` table and the primary table's
 `conversion` flag (see dataset.yaml).
 
-Writing produces the lowest version that can represent the data: "1.0"
-unless there's a preprocessed table ("1.1"), so files without one stay
-readable by older readers. Every dataset with more than one element is
+Steps (1.2) are stored as `/steps/<node>`: an empty group per step with
+every field as an attribute (lists as string arrays, absent fields
+omitted), read back ordered by `step_index` and renumbered 0, 1, 2, ...
+
+Writing produces the lowest version that can represent the data: "1.0",
+"1.1" with a preprocessed table, "1.2" with steps -- so files without the
+newer parts stay readable by older readers. Every dataset with more than one element is
 stored gzip-compressed (with shuffle). `DerivedDataset` arrays are stored
 under a `/computations/` group in their true N-D shape -- flattening to a
 plain list only exists at the schema/Python level (see dataset.yaml).
@@ -47,6 +52,7 @@ instead.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from pathlib import Path
@@ -57,6 +63,7 @@ import numpy as np
 
 from icoschema.schema.generated.python.dataset import (
     ChannelMetadata,
+    ComputationStep,
     DatasetBundle,
     DerivedDataset,
     HardwareMetadata,
@@ -78,7 +85,11 @@ _CHANNEL_METADATA_SLOTS = ("channel1_metadata", "channel2_metadata", "channel3_m
 _LEGACY_PRIMARY_TABLE = "acceleration"
 _BASE_FORMAT_VERSION = "1.0"
 _PREPROCESSED_FORMAT_VERSION = "1.1"
+_STEPS_FORMAT_VERSION = "1.2"
 _COMPUTATIONS_GROUP = "computations"
+_STEPS_GROUP = "steps"
+_STEP_STRING_ATTRS = ("producer", "params", "resolved_params", "status", "error", "summary", "started_at", "environment")
+_STEP_LIST_ATTRS = ("inputs", "output_keys")
 _PREPROCESSED_TABLE = "preprocessed"
 
 _METADATA_ATTRS = ("pre_metadata", "post_metadata")
@@ -232,6 +243,7 @@ def _load_recording_v1(f: h5py.File) -> Recording:
 _PARSERS = {
     "1.0": _load_recording_v1,
     "1.1": _load_recording_v1,
+    "1.2": _load_recording_v1,
 }
 
 
@@ -264,7 +276,7 @@ def _load_preprocessed(f: h5py.File, path: str) -> PreprocessedRecording | None:
     """The preprocessed table of a 1.1 file, or `None` if the file has none.
     Raises `ValueError` if the table is missing or lacks a required
     attribute -- it's primary data, so it's never skipped silently."""
-    if _format_version(f, path) != _PREPROCESSED_FORMAT_VERSION or "preprocessed_table" not in f.attrs:
+    if _format_version(f, path) in (None, _BASE_FORMAT_VERSION) or "preprocessed_table" not in f.attrs:
         return None
     table_name = _decode(f.attrs["preprocessed_table"])
     if table_name not in f:
@@ -382,6 +394,63 @@ def _write_preprocessed_table(f: h5py.File, preprocessed: PreprocessedRecording,
     ds.attrs["producer"] = preprocessed.producer
 
 
+def _write_steps(f: h5py.File, steps: list[ComputationStep]) -> None:
+    group = f.create_group(_STEPS_GROUP)
+    for step in steps:
+        step_group = group.create_group(str(step.node))
+        step_group.attrs["step_index"] = int(step.step_index)
+        for name in _STEP_STRING_ATTRS:
+            value = getattr(step, name)
+            if value is not None:
+                # LinkML enums render as a str subclass h5py can't store; encode/decode yields a plain str.
+                step_group.attrs[name] = str(value).encode().decode()
+        if step.duration_s is not None:
+            step_group.attrs["duration_s"] = float(step.duration_s)
+        for name in _STEP_LIST_ATTRS:
+            step_group.attrs.create(name, [str(v) for v in getattr(step, name)], dtype=h5py.string_dtype())
+
+
+# ── read: ComputationStep ───────────────────────────────────────────────────
+
+def _read_step(step_group: h5py.Group, node: str) -> ComputationStep:
+    attrs = step_group.attrs
+    return ComputationStep(
+        node=node,
+        step_index=int(attrs["step_index"]),
+        **{name: _decode(attrs[name]) for name in _STEP_STRING_ATTRS if name in attrs},
+        **({"duration_s": float(attrs["duration_s"])} if "duration_s" in attrs else {}),
+        **{name: [_decode(v) for v in attrs[name]] for name in _STEP_LIST_ATTRS if name in attrs},
+    )
+
+
+def _load_steps(
+    f: h5py.File, path: str, computations: dict[str, DerivedDataset], on_error: Literal["skip", "raise"]
+) -> list[ComputationStep]:
+    """The steps of a 1.2 file, ordered by `step_index` and renumbered 0, 1,
+    2, ... A malformed step, or one whose `output_keys` aren't all in
+    `computations` (e.g. because a malformed computation was skipped), is
+    logged and dropped -- or raises with `on_error="raise"`."""
+    if _format_version(f, path) != _STEPS_FORMAT_VERSION or _STEPS_GROUP not in f:
+        return []
+    steps: list[ComputationStep] = []
+    for node, step_group in f[_STEPS_GROUP].items():
+        try:
+            if not isinstance(step_group, h5py.Group):
+                raise TypeError(f"step {node!r} is not a group")
+            step = _read_step(step_group, node)
+            missing = [key for key in step.output_keys if key not in computations]
+            if missing:
+                raise ValueError(f"step {node!r} lists output_keys missing from computations: {missing}")
+        except Exception:
+            if on_error == "raise":
+                raise
+            logger.warning("Skipping malformed step %r in %r", node, path, exc_info=True)
+            continue
+        steps.append(step)
+    steps.sort(key=lambda step: (step.step_index, str(step.node)))
+    return [dataclasses.replace(step, step_index=i) for i, step in enumerate(steps)]
+
+
 def save_recording(recording: Recording, path: str, *, table_name: str = "recording") -> None:
     """Write a Recording to a fresh HDF5 file in the base (1.0) format."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -419,22 +488,29 @@ def _read_derived_dataset(ds: h5py.Dataset, key: str) -> DerivedDataset:
 
 def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "recording") -> None:
     """Write a DatasetBundle: the recording as the primary table, the
-    preprocessed table if any, and every DerivedDataset under a
-    `/computations/` group, each in its true N-D shape. Uses format 1.1 only
-    if there's a preprocessed table, else 1.0.
+    preprocessed table if any, every DerivedDataset under a `/computations/`
+    group, each in its true N-D shape, and the steps under `/steps/`. Uses
+    the lowest sufficient format: 1.2 with steps, else 1.1 with a
+    preprocessed table, else 1.0.
 
-    Doesn't check that the preprocessed table fits the recording -- that's
-    the model layer's job (`DatasetBundle.to_hdf5`)."""
+    Doesn't check that the preprocessed table fits the recording or that the
+    steps are consistent -- that's the model layer's job
+    (`DatasetBundle.to_hdf5`)."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as f:
         f.attrs["primary_table"] = table_name
         _write_recording_table(f, bundle.recording, table_name)
-        if bundle.preprocessed is None:
-            f.attrs["icoschema_format_version"] = _BASE_FORMAT_VERSION
-        else:
+        if bundle.steps:
+            f.attrs["icoschema_format_version"] = _STEPS_FORMAT_VERSION
+        elif bundle.preprocessed is not None:
             f.attrs["icoschema_format_version"] = _PREPROCESSED_FORMAT_VERSION
+        else:
+            f.attrs["icoschema_format_version"] = _BASE_FORMAT_VERSION
+        if bundle.preprocessed is not None:
             f.attrs["preprocessed_table"] = _PREPROCESSED_TABLE
             _write_preprocessed_table(f, bundle.preprocessed, _PREPROCESSED_TABLE)
+        if bundle.steps:
+            _write_steps(f, list(bundle.steps))
 
         if bundle.computations:
             computations_group = f.create_group(_COMPUTATIONS_GROUP)
@@ -444,10 +520,10 @@ def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "
 
 def load_dataset_bundle(path: str, *, on_error: Literal["skip", "raise"] = "skip") -> DatasetBundle:
     """Read a DatasetBundle: the recording, the preprocessed table (`None` if
-    the file has none), plus every DerivedDataset found under
-    `/computations/` (empty if the file has none).
+    the file has none), every DerivedDataset found under `/computations/`
+    and every ComputationStep under `/steps/` (empty if the file has none).
 
-    A malformed computation entry is logged and skipped by default
+    A malformed computation entry or step is logged and skipped by default
     (`on_error="skip"`); pass `on_error="raise"` to fail the whole read
     instead. A malformed preprocessed table always raises.
     """
@@ -470,4 +546,6 @@ def load_dataset_bundle(path: str, *, on_error: Literal["skip", "raise"] = "skip
 
             group.visititems(_visit)
 
-    return DatasetBundle(recording=recording, preprocessed=preprocessed, computations=computations)
+        steps = _load_steps(f, path, computations, on_error)
+
+    return DatasetBundle(recording=recording, preprocessed=preprocessed, computations=computations, steps=steps)

@@ -102,11 +102,37 @@ The preprocessed channels mean exactly what the raw channels mean (same sensors 
 stays untouched; while a bundle has a preprocessed table, `with_recording` raises — call `without_preprocessed()`
 first.
 
+**Record the steps that produced the computations:**
+
+```python
+from icoschema import ComputationStep
+
+bundle = bundle.with_computation("rms/channel1", derived)          # add the step's data first
+bundle = bundle.with_step(ComputationStep(
+    node="rms",                        # unique, one HDF5 path segment
+    step_index=0,                      # assigned by with_step
+    producer="rms@1.0.0",
+    params='{"window_size": 200}',
+    output_keys=["rms/channel1"],      # authoritative link from the step to its data
+    status="ok",
+))
+bundle.computations_of("rms")          # {"rms/channel1": ...}
+bundle.unmanaged_keys()                # computations no step lists
+bundle = bundle.without_steps(["rms"]) # drops the step and its output_keys; the rest is renumbered
+```
+
+`steps` is a list ordered by `step_index`. `with_step` raises for a duplicate or malformed node name, or an
+`output_keys` entry that isn't in `computations`. How steps are named or how keys relate to node names is up to the
+producer.
+
 ### File format
 
 - `1.0`: the recording (primary table + `sensors`) and optional `/computations/`.
 - `1.1`: additionally a preprocessed table. Written only when the bundle has one, so files without it stay readable
   by older versions, which reject `1.1` instead of silently dropping the table.
+- `1.2`: additionally a `/steps/` group (one attribute-only group per step). Written only when the bundle has steps;
+  read back ordered by `step_index`. A malformed step, or one whose `output_keys` are missing, is skipped (or raises
+  with `on_error="raise"`).
 - Legacy files (no version, table `acceleration`) are read as before.
 - All datasets with more than one element are gzip-compressed. The `pre_metadata`/`post_metadata` attributes of the
   primary table are preserved.
@@ -210,10 +236,26 @@ classDiagram
         +string fill_method
         +string producer
     }
+    class ComputationStep {
+        +string node
+        +int step_index
+        +string producer
+        +string params
+        +string resolved_params
+        +string[] inputs
+        +ComputationStatus status
+        +string error
+        +string summary
+        +string[] output_keys
+        +string started_at
+        +float duration_s
+        +string environment
+    }
     class DatasetBundle {
         +Recording recording
         +PreprocessedRecording preprocessed
         +Map~string, DerivedDataset~ computations
+        +ComputationStep[] steps
     }
 
     Compensation <|-- Conversion
@@ -233,6 +275,7 @@ classDiagram
     DatasetBundle *-- Recording
     DatasetBundle o-- "0..1" PreprocessedRecording : preprocessed
     DatasetBundle o-- "0..*" DerivedDataset : computations
+    DatasetBundle o-- "0..*" ComputationStep : steps
 ```
 
 ## Open questions
