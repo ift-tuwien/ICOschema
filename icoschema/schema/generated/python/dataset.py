@@ -1,5 +1,5 @@
 # Auto generated from dataset.yaml by pythongen.py version: 0.0.1
-# Generation date: 2026-07-21T14:36:54
+# Generation date: 2026-10-26T14:52:53
 # Schema: dataset
 #
 # id: dataset_schema
@@ -59,7 +59,7 @@ from rdflib import (
 from linkml_runtime.linkml_model.types import Float, Integer, String
 
 metamodel_version = "1.11.0"
-version = "0.0.1"
+version = "0.0.2"
 
 # Namespaces
 DATASET = CurieNamespace('dataset', 'https://example.org/dataset/')
@@ -87,10 +87,18 @@ class RecordingMetadata(YAMLRoot):
     class_model_uri: ClassVar[URIRef] = DATASET.RecordingMetadata
 
     start_time: Optional[str] = None
+    pre_metadata: Optional[str] = None
+    post_metadata: Optional[str] = None
 
     def __post_init__(self, *_: str, **kwargs: Any):
         if self.start_time is not None and not isinstance(self.start_time, str):
             self.start_time = str(self.start_time)
+
+        if self.pre_metadata is not None and not isinstance(self.pre_metadata, str):
+            self.pre_metadata = str(self.pre_metadata)
+
+        if self.post_metadata is not None and not isinstance(self.post_metadata, str):
+            self.post_metadata = str(self.post_metadata)
 
         super().__post_init__(**kwargs)
 
@@ -110,6 +118,9 @@ class HardwareMetadata(YAMLRoot):
     channel1_metadata: Union[dict, "ChannelMetadata"] = None
     revision: Optional[str] = None
     adc_reference_voltage: Optional[str] = None
+    adc_prescaler: Optional[int] = None
+    adc_acquisition_time: Optional[int] = None
+    adc_oversample_rate: Optional[int] = None
     channel2_metadata: Optional[Union[dict, "ChannelMetadata"]] = None
     channel3_metadata: Optional[Union[dict, "ChannelMetadata"]] = None
 
@@ -125,6 +136,15 @@ class HardwareMetadata(YAMLRoot):
         if self.adc_reference_voltage is not None and not isinstance(self.adc_reference_voltage, str):
             self.adc_reference_voltage = str(self.adc_reference_voltage)
 
+        if self.adc_prescaler is not None and not isinstance(self.adc_prescaler, int):
+            self.adc_prescaler = int(self.adc_prescaler)
+
+        if self.adc_acquisition_time is not None and not isinstance(self.adc_acquisition_time, int):
+            self.adc_acquisition_time = int(self.adc_acquisition_time)
+
+        if self.adc_oversample_rate is not None and not isinstance(self.adc_oversample_rate, int):
+            self.adc_oversample_rate = int(self.adc_oversample_rate)
+
         if self.channel2_metadata is not None and not isinstance(self.channel2_metadata, ChannelMetadata):
             self.channel2_metadata = ChannelMetadata(**as_dict(self.channel2_metadata))
 
@@ -137,7 +157,7 @@ class HardwareMetadata(YAMLRoot):
 @dataclass(repr=False)
 class ChannelMetadata(YAMLRoot):
     """
-    Metadata describing a single sensor channel: which physical Sensor produced it, and the compensations to apply to
+    Metadata describing a single sensor channel: which physical sensor produced it, and the compensations to apply to
     its raw RecordingData values to obtain a value in sensor.unit.
     """
     _inherited_slots: ClassVar[list[str]] = []
@@ -427,6 +447,74 @@ class Recording(YAMLRoot):
 
 
 @dataclass(repr=False)
+class PreprocessedRecording(YAMLRoot):
+    """
+    The raw RecordingData channels placed on the gap-free sample grid (lost packets filled) with timestamps rebased to
+    1 / sampling frequency. Row j is grid position j, where position 0 is the first received raw row. Channel values
+    are copied from RecordingData as stored, whatever their compensations say: they share the Recording's
+    HardwareMetadata (sensors, compensations) and mean exactly what the raw channels mean.
+    """
+    _inherited_slots: ClassVar[list[str]] = []
+
+    class_class_uri: ClassVar[URIRef] = DATASET["PreprocessedRecording"]
+    class_class_curie: ClassVar[str] = "dataset:PreprocessedRecording"
+    class_name: ClassVar[str] = "PreprocessedRecording"
+    class_model_uri: ClassVar[URIRef] = DATASET.PreprocessedRecording
+
+    timestamp: Union[int, list[int]] = None
+    channel1: Union[float, list[float]] = None
+    channel_sampling_frequency: float = None
+    sampling_frequency_source: Union[str, "SamplingFrequencySource"] = None
+    fill_method: str = None
+    producer: str = None
+    channel2: Optional[Union[float, list[float]]] = empty_list()
+    channel3: Optional[Union[float, list[float]]] = empty_list()
+
+    def __post_init__(self, *_: str, **kwargs: Any):
+        if self._is_empty(self.timestamp):
+            self.MissingRequiredField("timestamp")
+        if not isinstance(self.timestamp, list):
+            self.timestamp = [self.timestamp] if self.timestamp is not None else []
+        self.timestamp = [v if isinstance(v, int) else int(v) for v in self.timestamp]
+
+        if self._is_empty(self.channel1):
+            self.MissingRequiredField("channel1")
+        if not isinstance(self.channel1, list):
+            self.channel1 = [self.channel1] if self.channel1 is not None else []
+        self.channel1 = [v if isinstance(v, float) else float(v) for v in self.channel1]
+
+        if self._is_empty(self.channel_sampling_frequency):
+            self.MissingRequiredField("channel_sampling_frequency")
+        if not isinstance(self.channel_sampling_frequency, float):
+            self.channel_sampling_frequency = float(self.channel_sampling_frequency)
+
+        if self._is_empty(self.sampling_frequency_source):
+            self.MissingRequiredField("sampling_frequency_source")
+        if not isinstance(self.sampling_frequency_source, SamplingFrequencySource):
+            self.sampling_frequency_source = SamplingFrequencySource(self.sampling_frequency_source)
+
+        if self._is_empty(self.fill_method):
+            self.MissingRequiredField("fill_method")
+        if not isinstance(self.fill_method, str):
+            self.fill_method = str(self.fill_method)
+
+        if self._is_empty(self.producer):
+            self.MissingRequiredField("producer")
+        if not isinstance(self.producer, str):
+            self.producer = str(self.producer)
+
+        if not isinstance(self.channel2, list):
+            self.channel2 = [self.channel2] if self.channel2 is not None else []
+        self.channel2 = [v if isinstance(v, float) else float(v) for v in self.channel2]
+
+        if not isinstance(self.channel3, list):
+            self.channel3 = [self.channel3] if self.channel3 is not None else []
+        self.channel3 = [v if isinstance(v, float) else float(v) for v in self.channel3]
+
+        super().__post_init__(**kwargs)
+
+
+@dataclass(repr=False)
 class DerivedDataset(YAMLRoot):
     """
     One named, computed array derived from a Recording, plus the description of how it was produced.
@@ -492,7 +580,7 @@ class DerivedDataset(YAMLRoot):
 @dataclass(repr=False)
 class DatasetBundle(YAMLRoot):
     """
-    A Recording together with every DerivedDataset computed from it.
+    A Recording together with its optional PreprocessedRecording and every DerivedDataset computed from them.
     """
     _inherited_slots: ClassVar[list[str]] = []
 
@@ -502,6 +590,7 @@ class DatasetBundle(YAMLRoot):
     class_model_uri: ClassVar[URIRef] = DATASET.DatasetBundle
 
     recording: Union[dict, Recording] = None
+    preprocessed: Optional[Union[dict, PreprocessedRecording]] = None
     computations: Optional[Union[dict[Union[str, DerivedDatasetKey], Union[dict, DerivedDataset]], list[Union[dict, DerivedDataset]]]] = empty_dict()
 
     def __post_init__(self, *_: str, **kwargs: Any):
@@ -510,13 +599,33 @@ class DatasetBundle(YAMLRoot):
         if not isinstance(self.recording, Recording):
             self.recording = Recording(**as_dict(self.recording))
 
+        if self.preprocessed is not None and not isinstance(self.preprocessed, PreprocessedRecording):
+            self.preprocessed = PreprocessedRecording(**as_dict(self.preprocessed))
+
         self._normalize_inlined_as_dict(slot_name="computations", slot_type=DerivedDataset, key_name="key", keyed=True)
 
         super().__post_init__(**kwargs)
 
 
 # Enumerations
+class SamplingFrequencySource(EnumDefinitionImpl):
+    """
+    Where a per-channel sampling frequency came from.
+    """
+    override = PermissibleValue(
+        text="override",
+        description="Given explicitly by whoever produced the data.")
+    hardware = PermissibleValue(
+        text="hardware",
+        description="Computed from the ADC settings recorded in HardwareMetadata.")
+    default = PermissibleValue(
+        text="default",
+        description="Computed from the default ADC settings, because the recording doesn't record its own.")
 
+    _defn = EnumDefinition(
+        name="SamplingFrequencySource",
+        description="Where a per-channel sampling frequency came from.",
+    )
 
 # Slots
 class slots:
@@ -525,11 +634,26 @@ class slots:
 slots.recordingMetadata__start_time = Slot(uri=DATASET.start_time, name="recordingMetadata__start_time", curie=DATASET.curie('start_time'),
                    model_uri=DATASET.recordingMetadata__start_time, domain=None, range=Optional[str])
 
+slots.recordingMetadata__pre_metadata = Slot(uri=DATASET.pre_metadata, name="recordingMetadata__pre_metadata", curie=DATASET.curie('pre_metadata'),
+                   model_uri=DATASET.recordingMetadata__pre_metadata, domain=None, range=Optional[str])
+
+slots.recordingMetadata__post_metadata = Slot(uri=DATASET.post_metadata, name="recordingMetadata__post_metadata", curie=DATASET.curie('post_metadata'),
+                   model_uri=DATASET.recordingMetadata__post_metadata, domain=None, range=Optional[str])
+
 slots.hardwareMetadata__revision = Slot(uri=DATASET.revision, name="hardwareMetadata__revision", curie=DATASET.curie('revision'),
                    model_uri=DATASET.hardwareMetadata__revision, domain=None, range=Optional[str])
 
 slots.hardwareMetadata__adc_reference_voltage = Slot(uri=DATASET.adc_reference_voltage, name="hardwareMetadata__adc_reference_voltage", curie=DATASET.curie('adc_reference_voltage'),
                    model_uri=DATASET.hardwareMetadata__adc_reference_voltage, domain=None, range=Optional[str])
+
+slots.hardwareMetadata__adc_prescaler = Slot(uri=DATASET.adc_prescaler, name="hardwareMetadata__adc_prescaler", curie=DATASET.curie('adc_prescaler'),
+                   model_uri=DATASET.hardwareMetadata__adc_prescaler, domain=None, range=Optional[int])
+
+slots.hardwareMetadata__adc_acquisition_time = Slot(uri=DATASET.adc_acquisition_time, name="hardwareMetadata__adc_acquisition_time", curie=DATASET.curie('adc_acquisition_time'),
+                   model_uri=DATASET.hardwareMetadata__adc_acquisition_time, domain=None, range=Optional[int])
+
+slots.hardwareMetadata__adc_oversample_rate = Slot(uri=DATASET.adc_oversample_rate, name="hardwareMetadata__adc_oversample_rate", curie=DATASET.curie('adc_oversample_rate'),
+                   model_uri=DATASET.hardwareMetadata__adc_oversample_rate, domain=None, range=Optional[int])
 
 slots.hardwareMetadata__channel1_metadata = Slot(uri=DATASET.channel1_metadata, name="hardwareMetadata__channel1_metadata", curie=DATASET.curie('channel1_metadata'),
                    model_uri=DATASET.hardwareMetadata__channel1_metadata, domain=None, range=Union[dict, ChannelMetadata])
@@ -609,6 +733,30 @@ slots.recording__recording_metadata = Slot(uri=DATASET.recording_metadata, name=
 slots.recording__recording_data = Slot(uri=DATASET.recording_data, name="recording__recording_data", curie=DATASET.curie('recording_data'),
                    model_uri=DATASET.recording__recording_data, domain=None, range=Union[dict, RecordingData])
 
+slots.preprocessedRecording__timestamp = Slot(uri=DATASET.timestamp, name="preprocessedRecording__timestamp", curie=DATASET.curie('timestamp'),
+                   model_uri=DATASET.preprocessedRecording__timestamp, domain=None, range=Union[int, list[int]])
+
+slots.preprocessedRecording__channel1 = Slot(uri=DATASET.channel1, name="preprocessedRecording__channel1", curie=DATASET.curie('channel1'),
+                   model_uri=DATASET.preprocessedRecording__channel1, domain=None, range=Union[float, list[float]])
+
+slots.preprocessedRecording__channel2 = Slot(uri=DATASET.channel2, name="preprocessedRecording__channel2", curie=DATASET.curie('channel2'),
+                   model_uri=DATASET.preprocessedRecording__channel2, domain=None, range=Optional[Union[float, list[float]]])
+
+slots.preprocessedRecording__channel3 = Slot(uri=DATASET.channel3, name="preprocessedRecording__channel3", curie=DATASET.curie('channel3'),
+                   model_uri=DATASET.preprocessedRecording__channel3, domain=None, range=Optional[Union[float, list[float]]])
+
+slots.preprocessedRecording__channel_sampling_frequency = Slot(uri=DATASET.channel_sampling_frequency, name="preprocessedRecording__channel_sampling_frequency", curie=DATASET.curie('channel_sampling_frequency'),
+                   model_uri=DATASET.preprocessedRecording__channel_sampling_frequency, domain=None, range=float)
+
+slots.preprocessedRecording__sampling_frequency_source = Slot(uri=DATASET.sampling_frequency_source, name="preprocessedRecording__sampling_frequency_source", curie=DATASET.curie('sampling_frequency_source'),
+                   model_uri=DATASET.preprocessedRecording__sampling_frequency_source, domain=None, range=Union[str, "SamplingFrequencySource"])
+
+slots.preprocessedRecording__fill_method = Slot(uri=DATASET.fill_method, name="preprocessedRecording__fill_method", curie=DATASET.curie('fill_method'),
+                   model_uri=DATASET.preprocessedRecording__fill_method, domain=None, range=str)
+
+slots.preprocessedRecording__producer = Slot(uri=DATASET.producer, name="preprocessedRecording__producer", curie=DATASET.curie('producer'),
+                   model_uri=DATASET.preprocessedRecording__producer, domain=None, range=str)
+
 slots.derivedDataset__key = Slot(uri=DATASET.key, name="derivedDataset__key", curie=DATASET.curie('key'),
                    model_uri=DATASET.derivedDataset__key, domain=None, range=URIRef)
 
@@ -638,6 +786,9 @@ slots.derivedDataset__description = Slot(uri=DATASET.description, name="derivedD
 
 slots.datasetBundle__recording = Slot(uri=DATASET.recording, name="datasetBundle__recording", curie=DATASET.curie('recording'),
                    model_uri=DATASET.datasetBundle__recording, domain=None, range=Union[dict, Recording])
+
+slots.datasetBundle__preprocessed = Slot(uri=DATASET.preprocessed, name="datasetBundle__preprocessed", curie=DATASET.curie('preprocessed'),
+                   model_uri=DATASET.datasetBundle__preprocessed, domain=None, range=Optional[Union[dict, PreprocessedRecording]])
 
 slots.datasetBundle__computations = Slot(uri=DATASET.computations, name="datasetBundle__computations", curie=DATASET.curie('computations'),
                    model_uri=DATASET.datasetBundle__computations, domain=None, range=Optional[Union[dict[Union[str, DerivedDatasetKey], Union[dict, DerivedDataset]], list[Union[dict, DerivedDataset]]]])

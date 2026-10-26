@@ -66,21 +66,57 @@ bundle = bundle.with_computation(derived.key, derived)
 bundle.to_hdf5("processed_file.hdf5")
 ```
 
-**Replace a recording after cleanup, keeping existing computations:**
+**Place samples on the gap-free grid and get the sampling frequency:**
 
 ```python
+recording = Recording.from_hdf5("some_file.hdf5")
+recording.sample_index()                 # grid position of every received row (lost packets leave holes)
+recording.filled_mask()                  # True where a packet was lost, over the whole grid
+recording.channel_sampling_frequency()   # (Hz per channel, "hardware" | "default")
+```
+
+The total sampling frequency is the ADC rate, shared by all channels:
+`38.4 MHz / ((adc_prescaler + 1) * (adc_acquisition_time + 13) * adc_oversample_rate)`,
+from the `adc_*` settings recorded in the file, or from the default settings (2, 8, 64 → 9523.81 Hz) when the file
+doesn't record them. The per-channel frequency is that divided by the number of channels.
+
+**Store a preprocessed table (lost packets filled, timestamps on the 1 / f_s grid):**
+
+```python
+from icoschema import PreprocessedRecording
+
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")
-filled = fill_dropped_packets(bundle.recording)   # some dataloss fill logic
-bundle = bundle.with_recording(filled)
+preprocessed = PreprocessedRecording(
+    timestamp=...,                     # first raw timestamp + round(j * 1e6 / channel_sampling_frequency)
+    channel1=...,                      # raw channel1 on the grid, not converted
+    channel_sampling_frequency=fs,     # Hz per channel
+    sampling_frequency_source="default",
+    fill_method="forward_fill",
+    producer="my_tool@1.0",
+)
+bundle = bundle.with_preprocessed(preprocessed)   # raises if it doesn't fit the recording
 bundle.to_hdf5("some_file.hdf5")
 ```
+
+The preprocessed channels mean exactly what the raw channels mean (same sensors and compensations). The raw recording
+stays untouched; while a bundle has a preprocessed table, `with_recording` raises — call `without_preprocessed()`
+first.
+
+### File format
+
+- `1.0`: the recording (primary table + `sensors`) and optional `/computations/`.
+- `1.1`: additionally a preprocessed table. Written only when the bundle has one, so files without it stay readable
+  by older versions, which reject `1.1` instead of silently dropping the table.
+- Legacy files (no version, table `acceleration`) are read as before.
+- All datasets with more than one element are gzip-compressed. The `pre_metadata`/`post_metadata` attributes of the
+  primary table are preserved.
 
 ## Development
 
 Regenerate the Python dataclasses after editing the schema:
 
 ```
-uv run gen-python .\ICOschema\schema\linkml\dataset.yaml > .\ICOschema\schema\generated\python\dataset.py
+uv run gen-python icoschema/schema/linkml/dataset.yaml > icoschema/schema/generated/python/dataset.py
 ```
 
 Run the tests:
@@ -100,6 +136,8 @@ classDiagram
     }
     class RecordingMetadata {
         +string start_time
+        +string pre_metadata
+        +string post_metadata
     }
     class RecordingData {
         +int[] timestamp
@@ -111,6 +149,9 @@ classDiagram
     class HardwareMetadata {
         +string revision
         +string adc_reference_voltage
+        +int adc_prescaler
+        +int adc_acquisition_time
+        +int adc_oversample_rate
         +ChannelMetadata channel1_metadata
         +ChannelMetadata channel2_metadata
         +ChannelMetadata channel3_metadata
@@ -159,8 +200,19 @@ classDiagram
         +string params
         +string description
     }
+    class PreprocessedRecording {
+        +int[] timestamp
+        +float[] channel1
+        +float[] channel2
+        +float[] channel3
+        +float channel_sampling_frequency
+        +SamplingFrequencySource sampling_frequency_source
+        +string fill_method
+        +string producer
+    }
     class DatasetBundle {
         +Recording recording
+        +PreprocessedRecording preprocessed
         +Map~string, DerivedDataset~ computations
     }
 
@@ -179,6 +231,7 @@ classDiagram
     ChannelMetadata *-- Sensor
     ChannelMetadata *-- "1..*" Compensation : compensations
     DatasetBundle *-- Recording
+    DatasetBundle o-- "0..1" PreprocessedRecording : preprocessed
     DatasetBundle o-- "0..*" DerivedDataset : computations
 ```
 
