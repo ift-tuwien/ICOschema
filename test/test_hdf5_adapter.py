@@ -17,7 +17,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-from hdf5_helpers import write_v1_file
+from hdf5_helpers import SENSOR_DTYPE, make_sensor_row, write_v1_file
 
 from icoschema.schema.generated.python.dataset import (
     DatasetBundle,
@@ -276,3 +276,82 @@ def test_load_dataset_bundle_raises_on_malformed_computation_when_requested(tmp_
 
     with pytest.raises(ValueError):
         load_dataset_bundle(str(out_file), on_error="raise")
+
+
+# ── files without sensor rows (old recordings) ──────────────────────────────
+
+def _write_sensorless_file(path, *, sensors: str, conversion: str = "true", channels=("x",)) -> None:
+    """A legacy-layout file (table `acceleration`) whose `sensors` table is `"empty"` or `"missing"`."""
+    with h5py.File(path, "w") as f:
+        table = np.zeros(3, dtype=[("counter", "u1"), ("timestamp", "<u8")] + [(c, "<f4") for c in channels])
+        table["counter"] = [0, 1, 2]
+        table["timestamp"] = [0, 100, 200]
+        for k, channel in enumerate(channels):
+            table[channel] = [1.5 + k, 2.5 + k, 3.5 + k]
+        ds = f.create_dataset("acceleration", data=table)
+        ds.attrs["Start_Time"] = "2026-01-01T00:00:00"
+        ds.attrs["adc_reference_voltage"] = "3.3"
+        ds.attrs["conversion"] = conversion
+        if sensors == "empty":
+            f.create_dataset("sensors", data=np.zeros(0, dtype=SENSOR_DTYPE))
+
+
+@pytest.mark.parametrize("sensors", ["empty", "missing"])
+def test_load_recording_without_sensor_rows_gets_an_unspecified_sensor(tmp_path, sensors):
+    path = tmp_path / "old.hdf5"
+    _write_sensorless_file(path, sensors=sensors, channels=("x", "y"))
+
+    recording = load_recording(str(path))
+
+    assert recording.recording_data.channel1 == pytest.approx([1.5, 2.5, 3.5])
+    assert recording.recording_data.channel2 == pytest.approx([2.5, 3.5, 4.5])
+    for metadata in (recording.hardware_metadata.channel1_metadata, recording.hardware_metadata.channel2_metadata):
+        assert all(getattr(metadata.sensor, field) is None for field in vars(metadata.sensor) if not field.startswith("_"))
+        assert len(metadata.compensations) == 1 and isinstance(metadata.compensations[0], NoConversion)
+    assert recording.hardware_metadata.channel3_metadata is None
+
+
+def test_load_recording_without_sensor_rows_rejects_an_unconverted_table(tmp_path):
+    path = tmp_path / "old_unconverted.hdf5"
+    _write_sensorless_file(path, sensors="empty", conversion="false")
+
+    with pytest.raises(ValueError, match="no sensor rows to take each channel's scaling_factor/offset from"):
+        load_recording(str(path))
+
+
+def test_load_recording_still_rejects_a_partial_sensor_table(tmp_path):
+    path = tmp_path / "partial.hdf5"
+    _write_sensorless_file(path, sensors="missing", channels=("x", "y"))
+    with h5py.File(path, "r+") as f:
+        f.create_dataset("sensors", data=make_sensor_row())  # one row for two channels
+
+    with pytest.raises(ValueError, match="sensor row per channel column"):
+        load_recording(str(path))
+
+
+@pytest.mark.parametrize("sensors", ["empty", "missing"])
+def test_a_recording_without_sensor_rows_is_written_back_without_them(tmp_path, sensors):
+    source = tmp_path / "old.hdf5"
+    _write_sensorless_file(source, sensors=sensors)
+    original = load_recording(str(source))
+
+    out = tmp_path / "rewritten.hdf5"
+    save_recording(original, str(out))
+
+    with h5py.File(out, "r") as f:
+        assert "sensors" not in f  # no rows of empty strings and zeros made up
+    reloaded = load_recording(str(out))
+    assert reloaded.recording_data.channel1 == pytest.approx(original.recording_data.channel1)
+    assert reloaded.hardware_metadata.channel1_metadata.sensor == original.hardware_metadata.channel1_metadata.sensor
+
+
+def test_a_dataset_bundle_without_sensor_rows_loads(tmp_path):
+    path = tmp_path / "old.hdf5"
+    _write_sensorless_file(path, sensors="empty")
+
+    bundle = load_dataset_bundle(str(path))
+
+    assert bundle.recording.recording_data.channel1 == pytest.approx([1.5, 2.5, 3.5])
+    out = tmp_path / "bundle.hdf5"
+    save_dataset_bundle(bundle, str(out))
+    assert load_dataset_bundle(str(out)).recording.recording_data.counter == [0, 1, 2]

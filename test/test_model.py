@@ -224,3 +224,33 @@ def test_dataset_bundle_with_recording_replaces_recording_only():
     assert updated.recording is corrected
     assert updated.computations == bundle.computations
     assert bundle.recording is not corrected  # original bundle untouched
+
+
+def test_recording_without_sensor_rows_loads_through_the_public_api(tmp_path):
+    import h5py
+    from hdf5_helpers import SENSOR_DTYPE
+
+    path = tmp_path / "old.hdf5"
+    with h5py.File(path, "w") as f:
+        table = np.zeros(4, dtype=[("counter", "u1"), ("timestamp", "<u8"), ("x", "<f4")])
+        table["counter"] = [0, 1, 2, 3]
+        table["timestamp"] = [0, 100, 200, 300]
+        table["x"] = [1.0, 2.0, 3.0, 4.0]
+        ds = f.create_dataset("acceleration", data=table)
+        ds.attrs["Start_Time"] = "2026-01-01T00:00:00"
+        ds.attrs["adc_reference_voltage"] = "3.3"
+        ds.attrs["conversion"] = "true"
+        f.create_dataset("sensors", data=np.zeros(0, dtype=SENSOR_DTYPE))  # old files: a table with no rows
+
+    recording = Recording.from_hdf5(str(path))
+
+    assert recording.channel1.tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert recording.hardware_metadata.channel1_metadata.sensor.unit is None
+    assert recording.summary()["channels"]["channel1"]["unit"] is None
+    assert recording.signal_loss_percentage == 0.0
+    assert recording.channel_sampling_frequency()[0] > 0  # from the default ADC settings
+
+    bundle = DatasetBundle.from_hdf5(str(path))
+    out = tmp_path / "out.hdf5"
+    bundle.to_hdf5(str(out))
+    assert DatasetBundle.from_hdf5(str(out)).recording.channel1.tolist() == [1.0, 2.0, 3.0, 4.0]

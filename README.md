@@ -134,6 +134,10 @@ producer.
   read back ordered by `step_index`. A malformed step, or one whose `output_keys` are missing, is skipped (or raises
   with `on_error="raise"`).
 - Legacy files (no version, table `acceleration`) are read as before.
+- A file with an empty or missing `sensors` table (old recordings) is read with an unspecified `Sensor()` (every field
+  `None`) per channel and no conversion, as long as its `conversion` attribute is `true`; if it isn't, there is no
+  scaling to take from the sensor rows and reading raises. Such a recording is written back without a `sensors` table.
+  Any other mismatch between channel columns and sensor rows still raises.
 - All datasets with more than one element are gzip-compressed. The `pre_metadata`/`post_metadata` attributes of the
   primary table are preserved.
 
