@@ -17,8 +17,10 @@ Read dispatches on the root-level `icoschema_format_version` attribute:
 Every version's primary table has `counter`/`timestamp` columns plus one to
 three channel columns, a `sensors` table with one row per channel column *in
 the same order* (nothing else records which sensor row belongs to which
-column), and `Start_Time`/`adc_reference_voltage`/`conversion` attributes on
-the primary table. Optional primary-table attributes: `pre_metadata`/
+column; old files from before sensors were described have an empty or no
+table, which reads as unspecified sensors -- see `_load_recording_from_table`),
+and `Start_Time`/`adc_reference_voltage`/`conversion` attributes on the
+primary table. Optional primary-table attributes: `pre_metadata`/
 `post_metadata` (opaque JSON strings) and the ADC settings
 `adc_prescaler`/`adc_acquisition_time`/`adc_oversample_rate`. Any other
 attribute that isn't PyTables bookkeeping is logged as dropped on read.
@@ -163,6 +165,11 @@ def _load_sensor(row) -> Sensor:
 
 
 def _load_channel_metadata(sensor_row, already_converted: bool) -> ChannelMetadata:
+    """`sensor_row` is `None` for a file without a sensor table: the channel
+    then gets an unspecified `Sensor()` (every field `None`) and, as there is
+    no scaling to read, can only be already converted."""
+    if sensor_row is None:
+        return ChannelMetadata(sensor=Sensor(), compensations=[NoConversion(order=0)])
     if already_converted:
         # The stored channel values are already in sensor.unit; nothing left to apply.
         compensations = [NoConversion(order=0)]
@@ -182,12 +189,27 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
 
     Shared by every format version; the only thing that differs between
     versions (so far) is how `table_name` itself is determined.
+
+    A file written before sensors were described has no sensor rows (the
+    table is empty or absent): its channels get an unspecified `Sensor()` and
+    no conversion. That is only possible when the table's `conversion` flag
+    says the values are already converted, since an unconverted file needs
+    each channel's `scaling_factor`/`offset` from its sensor row.
     """
     table_ds = f[table_name]
     table = table_ds[:]
-    sensor_rows = f["sensors"][:]
+    sensor_rows = f["sensors"][:] if "sensors" in f else []
 
     channel_columns = [name for name in table.dtype.names if name not in _NON_CHANNEL_COLUMNS]
+    already_converted = _decode(table_ds.attrs["conversion"]) == "true"
+    if channel_columns and len(sensor_rows) == 0:
+        if not already_converted:
+            raise ValueError(
+                f"Table {table_name!r} is not converted (its `conversion` attribute is not 'true') but the file "
+                f"has no sensor rows to take each channel's scaling_factor/offset from."
+            )
+        logger.info("Table %r has no sensor rows; its channels get an unspecified sensor", table_name)
+        sensor_rows = [None] * len(channel_columns)
     if len(channel_columns) != len(sensor_rows):
         raise ValueError(
             f"Expected one sensor row per channel column, got "
@@ -198,8 +220,6 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
             f"Recording supports at most {len(_CHANNEL_SLOTS)} channels, "
             f"got {len(channel_columns)}."
         )
-
-    already_converted = _decode(table_ds.attrs["conversion"]) == "true"
 
     dropped = sorted(
         name for name in table_ds.attrs if name not in _KNOWN_PRIMARY_ATTRS and not _PYTABLES_ATTR.match(name)
@@ -313,6 +333,11 @@ def _channel_conversion(channel_metadata: ChannelMetadata | None) -> tuple[bool,
     return True, 1.0, 0.0
 
 
+def _is_unspecified(sensor: Sensor) -> bool:
+    """Whether every field of `sensor` is `None` (what a file without sensor rows is read as)."""
+    return all(getattr(sensor, field.name) is None for field in dataclasses.fields(sensor))
+
+
 def _sensor_row(channel_metadata: ChannelMetadata, *, scaling_factor: float, offset: float) -> np.ndarray:
     sensor = channel_metadata.sensor
     row = np.zeros(1, dtype=_SENSOR_DTYPE)
@@ -353,6 +378,12 @@ def _write_recording_table(f: h5py.File, recording: Recording, table_name: str) 
             "already-converted states -- the v1 HDF5 format has a single "
             "table-level `conversion` flag shared by every channel."
         )
+    if conversion_flags <= {True} and all(
+        _is_unspecified(getattr(hardware, metadata_slot).sensor) for _, metadata_slot in present_channels
+    ):
+        # Nothing to record about the sensors (a file read without sensor rows): write no table instead
+        # of rows of empty strings and zeros, so the file reads back the same way.
+        sensor_rows = []
 
     dtype = [("counter", "u1"), ("timestamp", "<u8")] + [(slot, "<f4") for slot, _ in present_channels]
     table = np.zeros(len(data.timestamp), dtype=dtype)
