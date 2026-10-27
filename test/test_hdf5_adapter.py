@@ -355,3 +355,87 @@ def test_a_dataset_bundle_without_sensor_rows_loads(tmp_path):
     out = tmp_path / "bundle.hdf5"
     save_dataset_bundle(bundle, str(out))
     assert load_dataset_bundle(str(out)).recording.recording_data.counter == [0, 1, 2]
+
+
+# ── first-generation files: no sensors, no `conversion`, no `adc_reference_voltage` ──
+
+def _write_first_generation_file(path, *, columns=("x",), sensor_range="± 100.0 g₀") -> None:
+    """What the original acquisition tools wrote: table `acceleration` of physical values (g), with only
+    `Start_Time` and `Sensor_Range` as metadata."""
+    with h5py.File(path, "w") as f:
+        f.attrs["VERSION"] = b"1.0"
+        table = np.zeros(3, dtype=[("counter", "u1"), ("timestamp", "<u8")] + [(c, "<f4") for c in columns])
+        table["counter"] = [0, 1, 2]
+        table["timestamp"] = [0, 100, 200]
+        for k, column in enumerate(columns):
+            table[column] = [-1.5 + k, 0.5 + k, 99.0 - k]
+        ds = f.create_dataset("acceleration", data=table)
+        ds.attrs["Start_Time"] = "2024-10-29T14:41:29.529375"
+        if sensor_range is not None:
+            ds.attrs["Sensor_Range"] = sensor_range
+
+
+def test_load_recording_reads_a_first_generation_file(tmp_path, caplog):
+    path = tmp_path / "first_generation.hdf5"
+    _write_first_generation_file(path, columns=("x", "z"))
+
+    with caplog.at_level("WARNING", logger="icoschema.storage.python.hdf5"):
+        recording = load_recording(str(path))
+
+    assert recording.recording_data.channel1 == pytest.approx([-1.5, 0.5, 99.0])
+    assert recording.recording_data.channel2 == pytest.approx([-0.5, 1.5, 98.0])
+    assert recording.recording_metadata.start_time == "2024-10-29T14:41:29.529375"
+    assert recording.hardware_metadata.adc_reference_voltage is None
+    for metadata in (recording.hardware_metadata.channel1_metadata, recording.hardware_metadata.channel2_metadata):
+        assert (metadata.sensor.unit, metadata.sensor.phys_min, metadata.sensor.phys_max) == ("g", -100.0, 100.0)
+        assert metadata.sensor.sensor_id is None
+        assert len(metadata.compensations) == 1 and isinstance(metadata.compensations[0], NoConversion)
+    assert recording.hardware_metadata.channel1_metadata.sensor is not recording.hardware_metadata.channel2_metadata.sensor
+    assert "Sensor_Range" not in caplog.text  # understood, not dropped
+
+
+@pytest.mark.parametrize("sensor_range", [None, "fast"])
+def test_a_first_generation_file_without_a_readable_range_gets_an_unspecified_sensor(tmp_path, caplog, sensor_range):
+    path = tmp_path / "no_range.hdf5"
+    _write_first_generation_file(path, sensor_range=sensor_range)
+
+    with caplog.at_level("WARNING", logger="icoschema.storage.python.hdf5"):
+        recording = load_recording(str(path))
+
+    sensor = recording.hardware_metadata.channel1_metadata.sensor
+    assert sensor.unit is None and sensor.phys_max is None
+    assert ("Sensor_Range" in caplog.text) == (sensor_range is not None)  # an unreadable one is reported as dropped
+
+
+def test_a_first_generation_file_round_trips_through_the_current_format(tmp_path):
+    source = tmp_path / "first_generation.hdf5"
+    _write_first_generation_file(source)
+    original = load_recording(str(source))
+
+    out = tmp_path / "rewritten.hdf5"
+    save_recording(original, str(out))
+    reloaded = load_recording(str(out))
+
+    assert reloaded.recording_data.channel1 == pytest.approx(original.recording_data.channel1)
+    sensor = reloaded.hardware_metadata.channel1_metadata.sensor
+    assert (sensor.unit, sensor.phys_min, sensor.phys_max) == ("g", -100.0, 100.0)  # the range survives
+
+
+def test_load_recording_rejects_sensor_rows_without_a_conversion_flag(tmp_path):
+    path = tmp_path / "ambiguous.hdf5"
+    write_v1_file(path, rows=[(0, 0, 1.0)], already_converted=False)
+    with h5py.File(path, "r+") as f:
+        del f["vibration"].attrs["conversion"]
+
+    with pytest.raises(ValueError, match="no `conversion` attribute"):
+        load_recording(str(path))
+
+
+def test_a_first_generation_sensor_range_stored_as_bytes_is_read(tmp_path):
+    # the original tools wrote it as a fixed-length byte string
+    path = tmp_path / "bytes_range.hdf5"
+    _write_first_generation_file(path, sensor_range="± 200 g₀".encode())
+
+    sensor = load_recording(str(path)).hardware_metadata.channel1_metadata.sensor
+
+    assert (sensor.unit, sensor.phys_min, sensor.phys_max) == ("g", -200.0, 200.0)

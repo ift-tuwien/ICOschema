@@ -138,6 +138,10 @@ producer.
   `None`) per channel and no conversion, as long as its `conversion` attribute is `true`; if it isn't, there is no
   scaling to take from the sensor rows and reading raises. Such a recording is written back without a `sensors` table.
   Any other mismatch between channel columns and sensor rows still raises.
+- The first acquisition tools' files (table `acceleration` of physical values in g, only `Start_Time` and
+  `Sensor_Range` such as `± 100.0 g₀` as metadata) are read too: no `conversion` attribute (without sensor rows) means
+  converted, a missing `adc_reference_voltage` is `None`, and `Sensor_Range` becomes each channel's sensor unit and
+  range (`g`, -100..100). A `conversion`-less file that does have sensor rows raises.
 - All datasets with more than one element are gzip-compressed. The `pre_metadata`/`post_metadata` attributes of the
   primary table are preserved.
 
