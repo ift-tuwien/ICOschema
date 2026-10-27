@@ -254,3 +254,24 @@ def test_recording_without_sensor_rows_loads_through_the_public_api(tmp_path):
     out = tmp_path / "out.hdf5"
     bundle.to_hdf5(str(out))
     assert DatasetBundle.from_hdf5(str(out)).recording.channel1.tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_first_generation_file_loads_through_the_public_api(tmp_path):
+    import h5py
+
+    path = tmp_path / "first_generation.hdf5"
+    with h5py.File(path, "w") as f:
+        table = np.zeros(4, dtype=[("counter", "u1"), ("timestamp", "<u8"), ("x", "<f4")])
+        table["counter"] = [0, 1, 2, 3]
+        table["timestamp"] = [0, 100, 200, 300]
+        table["x"] = [1.0, 2.0, 3.0, 4.0]
+        ds = f.create_dataset("acceleration", data=table)
+        ds.attrs["Start_Time"] = "2024-10-29T14:41:29.529375"
+        ds.attrs["Sensor_Range"] = "± 100.0 g₀"
+
+    recording = Recording.from_hdf5(str(path))
+
+    assert recording.channel1.tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert recording.summary()["channels"]["channel1"]["unit"] == "g"
+    assert recording.hardware_metadata.adc_reference_voltage is None
+    assert DatasetBundle.from_hdf5(str(path)).recording.channel1.tolist() == [1.0, 2.0, 3.0, 4.0]

@@ -18,7 +18,8 @@ Every version's primary table has `counter`/`timestamp` columns plus one to
 three channel columns, a `sensors` table with one row per channel column *in
 the same order* (nothing else records which sensor row belongs to which
 column; old files from before sensors were described have an empty or no
-table, which reads as unspecified sensors -- see `_load_recording_from_table`),
+table, which reads as unspecified sensors, or as the sensor of a legacy
+`Sensor_Range` -- see `_load_recording_from_table`),
 and `Start_Time`/`adc_reference_voltage`/`conversion` attributes on the
 primary table. Optional primary-table attributes: `pre_metadata`/
 `post_metadata` (opaque JSON strings) and the ADC settings
@@ -164,12 +165,31 @@ def _load_sensor(row) -> Sensor:
     )
 
 
-def _load_channel_metadata(sensor_row, already_converted: bool) -> ChannelMetadata:
+# e.g. "± 100.0 g₀": what the original acquisition tools wrote as `Sensor_Range`
+_SENSOR_RANGE = re.compile(r"^\s*[±+-]?\s*(\d+(?:\.\d+)?)\s*(\S+)\s*$")
+
+
+def _sensor_from_range(attrs: h5py.AttributeManager) -> Sensor | None:
+    """The `Sensor` described by a legacy table's `Sensor_Range` attribute
+    (`"± 100.0 g₀"` -> unit `g`, range -100..100), or `None` if there is none
+    or it can't be read. Nothing else about the sensor was recorded."""
+    if "Sensor_Range" not in attrs:
+        return None
+    match = _SENSOR_RANGE.match(_decode(attrs["Sensor_Range"]))
+    if match is None:
+        return None
+    limit = float(match.group(1))
+    return Sensor(unit=match.group(2).replace("₀", ""), phys_min=-limit, phys_max=limit)
+
+
+def _load_channel_metadata(sensor_row, already_converted: bool, fallback_sensor: Sensor | None = None) -> ChannelMetadata:
     """`sensor_row` is `None` for a file without a sensor table: the channel
-    then gets an unspecified `Sensor()` (every field `None`) and, as there is
-    no scaling to read, can only be already converted."""
+    then gets `fallback_sensor` (a copy) if there is one, else an unspecified
+    `Sensor()` (every field `None`), and, as there is no scaling to read, can
+    only be already converted."""
     if sensor_row is None:
-        return ChannelMetadata(sensor=Sensor(), compensations=[NoConversion(order=0)])
+        sensor = dataclasses.replace(fallback_sensor) if fallback_sensor is not None else Sensor()
+        return ChannelMetadata(sensor=sensor, compensations=[NoConversion(order=0)])
     if already_converted:
         # The stored channel values are already in sensor.unit; nothing left to apply.
         compensations = [NoConversion(order=0)]
@@ -191,17 +211,31 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
     versions (so far) is how `table_name` itself is determined.
 
     A file written before sensors were described has no sensor rows (the
-    table is empty or absent): its channels get an unspecified `Sensor()` and
-    no conversion. That is only possible when the table's `conversion` flag
-    says the values are already converted, since an unconverted file needs
-    each channel's `scaling_factor`/`offset` from its sensor row.
+    table is empty or absent): its channels get the sensor described by a
+    `Sensor_Range` attribute if there is one (unit and range only), else an
+    unspecified `Sensor()`, and no conversion. That is only possible when the
+    table's `conversion` flag says the values are already converted, since an
+    unconverted file needs each channel's `scaling_factor`/`offset` from its
+    sensor row. The very first acquisition tools wrote neither sensor rows nor
+    a `conversion` flag nor `adc_reference_voltage`, only physical values (in
+    g) with `Start_Time` and `Sensor_Range`: a missing flag reads as converted
+    when there are no sensor rows, and a missing reference voltage as `None`.
     """
     table_ds = f[table_name]
     table = table_ds[:]
     sensor_rows = f["sensors"][:] if "sensors" in f else []
 
     channel_columns = [name for name in table.dtype.names if name not in _NON_CHANNEL_COLUMNS]
-    already_converted = _decode(table_ds.attrs["conversion"]) == "true"
+    fallback_sensor = None
+    if "conversion" in table_ds.attrs:
+        already_converted = _decode(table_ds.attrs["conversion"]) == "true"
+    elif len(sensor_rows) == 0:
+        already_converted = True
+    else:
+        raise ValueError(
+            f"Table {table_name!r} has sensor rows but no `conversion` attribute to say whether to apply their "
+            f"scaling_factor/offset."
+        )
     if channel_columns and len(sensor_rows) == 0:
         if not already_converted:
             raise ValueError(
@@ -210,6 +244,7 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
             )
         logger.info("Table %r has no sensor rows; its channels get an unspecified sensor", table_name)
         sensor_rows = [None] * len(channel_columns)
+        fallback_sensor = _sensor_from_range(table_ds.attrs)
     if len(channel_columns) != len(sensor_rows):
         raise ValueError(
             f"Expected one sensor row per channel column, got "
@@ -221,9 +256,8 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
             f"got {len(channel_columns)}."
         )
 
-    dropped = sorted(
-        name for name in table_ds.attrs if name not in _KNOWN_PRIMARY_ATTRS and not _PYTABLES_ATTR.match(name)
-    )
+    known_attrs = _KNOWN_PRIMARY_ATTRS | ({"Sensor_Range"} if fallback_sensor is not None else set())
+    dropped = sorted(name for name in table_ds.attrs if name not in known_attrs and not _PYTABLES_ATTR.match(name))
     if dropped:
         logger.warning("Primary table %r has unknown attributes that won't be preserved: %s", table_name, dropped)
 
@@ -232,14 +266,14 @@ def _load_recording_from_table(f: h5py.File, table_name: str) -> Recording:
         "counter": table["counter"].tolist(),
     }
     hardware_metadata_kwargs = {
-        "adc_reference_voltage": _decode(table_ds.attrs["adc_reference_voltage"]),
+        "adc_reference_voltage": _optional_str(table_ds.attrs, "adc_reference_voltage"),
         **{name: _optional_int(table_ds.attrs, name) for name in _ADC_SETTING_ATTRS},
     }
     for channel_slot, metadata_slot, column, sensor_row in zip(
         _CHANNEL_SLOTS, _CHANNEL_METADATA_SLOTS, channel_columns, sensor_rows
     ):
         recording_data_kwargs[channel_slot] = table[column].tolist()
-        hardware_metadata_kwargs[metadata_slot] = _load_channel_metadata(sensor_row, already_converted)
+        hardware_metadata_kwargs[metadata_slot] = _load_channel_metadata(sensor_row, already_converted, fallback_sensor)
 
     return Recording(
         recording_metadata=RecordingMetadata(
