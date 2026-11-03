@@ -151,17 +151,28 @@ def _optional_int(attrs: h5py.AttributeManager, name: str) -> int | None:
 
 # ── read: Recording ──────────────────────────────────────────────────────────
 
+def _row_str(row, column: str) -> str | None:
+    """A text column of a sensors row, `None` if the table was written without that column."""
+    return row[column].decode() if column in row.dtype.names else None
+
+
+def _row_float(row, column: str) -> float | None:
+    return float(row[column]) if column in row.dtype.names else None
+
+
 def _load_sensor(row) -> Sensor:
+    """Every column is optional: sensors tables written by older tools lack some (e.g. `dimension`), and a
+    missing column is an unknown value (`None`), not an error."""
     return Sensor(
-        sensor_id=row["sensor_id"].decode(),
-        sensor_type=row["sensor_type"].decode(),
-        name=row["name"].decode(),
-        unit=row["unit"].decode(),
-        dimension=row["dimension"].decode(),
-        phys_min=float(row["phys_min"]),
-        phys_max=float(row["phys_max"]),
-        volt_min=float(row["volt_min"]),
-        volt_max=float(row["volt_max"]),
+        sensor_id=_row_str(row, "sensor_id"),
+        sensor_type=_row_str(row, "sensor_type"),
+        name=_row_str(row, "name"),
+        unit=_row_str(row, "unit"),
+        dimension=_row_str(row, "dimension"),
+        phys_min=_row_float(row, "phys_min"),
+        phys_max=_row_float(row, "phys_max"),
+        volt_min=_row_float(row, "volt_min"),
+        volt_max=_row_float(row, "volt_max"),
     )
 
 
