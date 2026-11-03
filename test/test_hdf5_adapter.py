@@ -439,3 +439,24 @@ def test_a_first_generation_sensor_range_stored_as_bytes_is_read(tmp_path):
     sensor = load_recording(str(path)).hardware_metadata.channel1_metadata.sensor
 
     assert (sensor.unit, sensor.phys_min, sensor.phys_max) == ("g", -200.0, 200.0)
+
+
+# ── sensors tables written without some columns ──────────────────────────────
+
+def test_sensors_table_without_a_dimension_column_loads_with_dimension_unset(tmp_path):
+    columns = [(n, t) for n, t in SENSOR_DTYPE if n != "dimension"]
+    row = np.zeros(1, dtype=columns)
+    row["name"], row["sensor_id"], row["sensor_type"], row["unit"] = b"Acc", b"acc40g_x", b"ACC", b"g"
+    row["phys_min"], row["phys_max"], row["scaling_factor"], row["offset"] = -40.0, 40.0, 2.0, -1.0
+    path = tmp_path / "no_dimension.hdf5"
+    _write_sensorless_file(path, sensors="missing", conversion="false")
+    with h5py.File(path, "a") as f:
+        f.create_dataset("sensors", data=row)
+
+    recording = load_recording(str(path))
+
+    sensor = recording.hardware_metadata.channel1_metadata.sensor
+    assert sensor.dimension is None
+    assert (sensor.sensor_id, sensor.unit, sensor.phys_min, sensor.phys_max) == ("acc40g_x", "g", -40.0, 40.0)
+    conversion = recording.hardware_metadata.channel1_metadata.compensations[0]
+    assert isinstance(conversion, LinearConversion) and (conversion.gain, conversion.offset) == (2.0, -1.0)
