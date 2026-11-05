@@ -147,17 +147,70 @@ producer.
 
 ## Development
 
-Regenerate the Python dataclasses after editing the schema:
+Regenerate the Python dataclasses **and** the Rust types after editing the schema:
 
 ```
-uv run gen-python icoschema/schema/linkml/dataset.yaml > icoschema/schema/generated/python/dataset.py
+just generate
 ```
 
-Run the tests:
+(`just check-generated` fails if the committed generated code is stale; CI runs it.) Run the tests:
 
 ```
-uv run pytest
+just test        # Python
+just test-rust   # Rust, see below
 ```
+
+### Rust port
+
+`rust/` is a Rust port of the model and storage layers, laid out like the Python package:
+
+| | Python | Rust |
+|---|---|---|
+| generated schema | `icoschema/schema/generated/python` | `icoschema/schema/generated/rust` (crate `icoschema-gen`) |
+| model (convenience API) | `icoschema/model/python` | `rust/src/model` |
+| storage (HDF5) | `icoschema/storage/python/hdf5.py` | `rust/src/storage` |
+
+```rust
+let bundle = icoschema::DatasetBundle::from_hdf5("some_file.hdf5")?;
+let recording = &bundle.recording;
+println!("{:.3} % lost", recording.signal_loss_percentage());
+let grid = recording.sample_index()?;
+```
+
+It reads all file format versions (legacy, 1.0 to 1.2) and writes 1.0 to 1.2 with
+[`rust-hdf5`](https://crates.io/crates/rust-hdf5), a pure Rust HDF5 library, so it builds without libhdf5 or any other C
+code. The one thing `rust-hdf5` cannot do is read arrays of variable-length strings (`inputs`, `output_keys` of a step);
+`rust/src/storage/vlen.rs` does that itself.
+
+```rust
+let bundle = icoschema::DatasetBundle::from_hdf5("in.hdf5")?
+    .with_computation("rms/channel1", derived)
+    .with_step(step)?;               // numbered, validated like the Python `with_step`
+bundle.to_hdf5("out.hdf5")?;         // gzip + shuffle, lowest sufficient format version
+```
+
+The writer produces what the Python writer produces (the tests compare what Python reads back), with two differences,
+both on purpose: where Python quietly loses information the Rust writer returns an error. That covers compensations
+the file format has no place for (`PolynomialConversion`, `FrequencyCompensation`, more than one per channel, the hardware `revision`), values
+that do not fit their column (counter above 255, negative timestamps, a sensor text longer than its field) and
+computation dtypes it cannot store. And a failed write never leaves a file: it writes to `<file>.tmp` and renames it.
+Files use HDF5 superblock version 2, which every HDF5 library since 1.8 reads.
+
+**Changing the schema.** Edit `icoschema/schema/linkml/dataset.yaml`, run `just generate`, then `just test-rust`. The
+Rust side cannot silently fall behind:
+
+- a new or renamed *attribute* makes `rust/src/storage` fail to compile (every generated struct is built field by
+  field), pointing at the code to extend;
+- a new *enum value* fails to compile too (the enum name tables match exhaustively);
+- a new *class* or *subclass* can compile fine, so `rust/tests/schema_coverage.rs` compares the schema with the
+  manifest in `rust/src/schema_support.rs` and fails naming the new element. Handle it, then list it there (as handled,
+  or as unsupported with the reason, for things the file format has no place for such as `PolynomialConversion`).
+
+The Rust tests read fixtures in `rust/tests/fixtures` and compare every value with what the Python implementation reads
+from the same files (`expected.json`, `reference.rs`), and what it reads after writing them again (`expected_roundtrip.json`,
+`writer.rs`). `rust/tests/interop.py` (part of `just test-rust`) goes the other way: Rust writes every fixture and the
+Python package, on libhdf5 through h5py, must read the same content. After changing the Python reader or writer, rebuild
+the fixtures with `just rust-fixtures`.
 
 ## Schema
 
