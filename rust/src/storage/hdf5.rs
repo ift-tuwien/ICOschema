@@ -13,7 +13,6 @@ use crate::{invalid, Error, Result};
 
 const LEGACY_PRIMARY_TABLE: &str = "acceleration";
 const SUPPORTED: [&str; 3] = ["1.0", "1.1", "1.2"];
-const CHANNELS: [&str; 3] = ["channel1", "channel2", "channel3"];
 
 // ── enums ───────────────────────────────────────────────────────────────────
 //
@@ -24,7 +23,7 @@ const CHANNELS: [&str; 3] = ["channel1", "channel2", "channel3"];
 const SOURCES: [g::SamplingFrequencySource; 3] =
     [g::SamplingFrequencySource::Override, g::SamplingFrequencySource::Hardware, g::SamplingFrequencySource::Default];
 
-fn source_name(value: &g::SamplingFrequencySource) -> &'static str {
+pub(super) fn source_name(value: &g::SamplingFrequencySource) -> &'static str {
     match value {
         g::SamplingFrequencySource::Override => "override",
         g::SamplingFrequencySource::Hardware => "hardware",
@@ -34,7 +33,7 @@ fn source_name(value: &g::SamplingFrequencySource) -> &'static str {
 
 const STATUSES: [g::ComputationStatus; 2] = [g::ComputationStatus::Ok, g::ComputationStatus::Error];
 
-fn status_name(value: &g::ComputationStatus) -> &'static str {
+pub(super) fn status_name(value: &g::ComputationStatus) -> &'static str {
     match value {
         g::ComputationStatus::Ok => "ok",
         g::ComputationStatus::Error => "error",

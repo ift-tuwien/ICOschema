@@ -72,6 +72,11 @@ impl Recording {
         storage::hdf5::load_recording(path).map(Self)
     }
 
+    /// Writes the recording alone (format version 1.0) to a fresh HDF5 file.
+    pub fn to_hdf5(&self, path: &str) -> Result<()> {
+        storage::write::save_recording(&self.0, path)
+    }
+
     pub fn into_inner(self) -> g::Recording {
         self.0
     }

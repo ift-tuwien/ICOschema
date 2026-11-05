@@ -13,8 +13,8 @@
 pub enum Support {
     /// Read from the HDF5 file and available through the model.
     Full,
-    /// Exists in the schema, but the file format cannot hold it. The reason is the message a
-    /// reader gives if it ever meets it.
+    /// Exists in the schema, but the file format cannot hold it. The writer refuses it with this
+    /// reason (`storage/write.rs`); the reader never produces it.
     Unsupported(&'static str),
 }
 
