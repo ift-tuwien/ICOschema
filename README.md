@@ -211,17 +211,54 @@ producer.
 
 ## Development
 
-Regenerate the Python dataclasses after editing the schema:
+Regenerate the Python dataclasses **and** the Rust types after editing the schema:
 
 ```
-uv run gen-python icoschema/schema/linkml/dataset.yaml > icoschema/schema/generated/python/dataset.py
+just generate
 ```
 
-Run the tests:
+(`just check-generated` fails if the committed generated code is stale; CI runs it.) Run the tests:
 
 ```
-uv run pytest
+just test        # Python
+just test-rust   # Rust, see below
 ```
+
+### Rust port
+
+`rust/` is a Rust port of the model and storage layers, laid out like the Python package:
+
+| | Python | Rust |
+|---|---|---|
+| generated schema | `icoschema/schema/generated/python` | `icoschema/schema/generated/rust` (crate `icoschema-gen`) |
+| model (convenience API) | `icoschema/model/python` | `rust/src/model` |
+| storage (HDF5) | `icoschema/storage/python/hdf5.py` | `rust/src/storage` |
+
+```rust
+let bundle = icoschema::DatasetBundle::from_hdf5("some_file.hdf5")?;
+let recording = &bundle.recording;
+println!("{:.3} % lost", recording.signal_loss_percentage());
+let grid = recording.sample_index()?;
+```
+
+It reads all file format versions (legacy, 1.0 to 1.2) with [`rust-hdf5`](https://crates.io/crates/rust-hdf5), a pure Rust
+HDF5 library, so it builds without libhdf5 or any other C code. Writing is not ported yet. The one thing `rust-hdf5`
+cannot do is read arrays of variable-length strings (`inputs`, `output_keys` of a step); `rust/src/storage/vlen.rs` does
+that itself.
+
+**Changing the schema.** Edit `icoschema/schema/linkml/dataset.yaml`, run `just generate`, then `just test-rust`. The
+Rust side cannot silently fall behind:
+
+- a new or renamed *attribute* makes `rust/src/storage` fail to compile (every generated struct is built field by
+  field), pointing at the code to extend;
+- a new *enum value* fails to compile too (the enum name tables match exhaustively);
+- a new *class* or *subclass* can compile fine, so `rust/tests/schema_coverage.rs` compares the schema with the
+  manifest in `rust/src/schema_support.rs` and fails naming the new element. Handle it, then list it there (as handled,
+  or as unsupported with the reason, for things the file format has no place for such as `PolynomialConversion`).
+
+The Rust tests (`rust/tests/reference.rs`) read fixtures in `rust/tests/fixtures` and compare every value with what the
+Python implementation reads from the same files (`expected.json`). After changing the Python reader, rebuild them with
+`just rust-fixtures`.
 
 ## Schema
 

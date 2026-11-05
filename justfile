@@ -22,6 +22,26 @@ check: setup
 test: check
 	uv run pytest
 
+# Regenerate the Python and Rust code from the LinkML schema (icoschema/schema/linkml/dataset.yaml)
+[group('schema')]
+generate: setup
+	uv run python scripts/generate.py
+
+# Fail if the generated code is stale compared to the LinkML schema
+[group('schema')]
+check-generated: setup
+	uv run python scripts/generate.py --check
+
+# Test the Rust port (needs a stable Rust toolchain); fails if the schema has something it does not handle
+[group('test')]
+test-rust: check-generated
+	cargo test --workspace
+
+# Rebuild the Rust test fixtures and their expected values from the Python implementation
+[group('test')]
+rust-fixtures: setup
+	uv run python rust/tests/gen_fixtures.py
+
 # Release new package version
 [group('release')]
 [unix]
