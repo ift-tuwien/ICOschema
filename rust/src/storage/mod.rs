@@ -2,6 +2,7 @@
 pub mod hdf5;
 mod table;
 mod vlen;
+pub mod write;
 
 use rust_hdf5::H5Dataset;
 
