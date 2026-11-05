@@ -45,3 +45,23 @@ jobs:
 
       - name: Check and test code
         run: just test
+
+  rust:
+    name: 🦀 Rust port and generated code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check that the generated code is up to date and test the Rust port
+        run: just test-rust
