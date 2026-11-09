@@ -19,8 +19,21 @@ Read dispatches on the root-level `icoschema_format_version` attribute:
   group, so no `source_name` attribute). It may also have `/steps/`
   and `/computations/`, and a preprocessed table per source inside that
   source's group (the root attribute `preprocessed_table` names it; sources
-  without one simply don't have it). Any other version is rejected, so an
-  older reader never silently drops parts of a newer file.
+  without one simply don't have it). Version "1.4" is a superset of the
+  others for sources that carry what a plain packet recording does not (a
+  TDMS file's): the primary table may have no `counter` column, and the
+  primary table may have the attributes `sampling_frequency` (Hz, per channel)
+  and `additional_data` (opaque JSON) and a sibling dataset `quality` (the
+  source's signal quality in percent, attribute `sampling_frequency`); a
+  single source's name is always stored (`source_name`). It has `sources` or
+  not like 1.3 resp. 1.0-1.2 and may have `/steps/` and `/computations/`. Any
+  other version is rejected, so an older reader never silently drops parts of
+  a newer file.
+
+Every file written by this module also gets the root attribute `writer`
+(`"icoschema <version>"`), and, if the bundle has a provenance, the root
+attributes `source_format`, `source_format_version` and `reader`, which say
+where the data was originally read from; older readers ignore them.
 
 Every version's primary table has `counter`/`timestamp` columns plus one to
 three channel columns, a `sensors` table with one row per channel column *in
@@ -50,8 +63,9 @@ omitted), read back ordered by `step_index` and renumbered 0, 1, 2, ...
 
 Writing produces the lowest version that can represent the data: "1.0",
 "1.1" with a preprocessed table, "1.2" with steps, "1.3" with more than one
-source (a single source always uses the 1.0-1.2 layout) -- so files without the
-newer parts stay readable by older readers. Every dataset with more than one element is
+source (a single source always uses the 1.0-1.2 layout), "1.4" if a source
+has no counter or has a `sampling_frequency`, `quality` or `additional_data`
+-- so files without the newer parts stay readable by older readers. Every dataset with more than one element is
 stored gzip-compressed (with shuffle). `DerivedDataset` arrays are stored
 under a `/computations/` group in their true N-D shape -- flattening to a
 plain list only exists at the schema/Python level (see dataset.yaml).
@@ -77,6 +91,7 @@ from typing import Literal
 import h5py
 import numpy as np
 
+from icoschema._version import software_id
 from icoschema.schema.generated.python.dataset import (
     ChannelMetadata,
     ComputationStep,
@@ -86,6 +101,8 @@ from icoschema.schema.generated.python.dataset import (
     LinearConversion,
     NoConversion,
     PreprocessedRecording,
+    Provenance,
+    QualityChannel,
     Recording,
     RecordingData,
     RecordingMetadata,
@@ -104,6 +121,9 @@ _BASE_FORMAT_VERSION = "1.0"
 _PREPROCESSED_FORMAT_VERSION = "1.1"
 _STEPS_FORMAT_VERSION = "1.2"
 _SOURCES_FORMAT_VERSION = "1.3"
+_FEATURES_FORMAT_VERSION = "1.4"
+_QUALITY_DATASET = "quality"
+_PROVENANCE_ATTRS = ("source_format", "source_format_version", "reader")
 _COMPUTATIONS_GROUP = "computations"
 _STEPS_GROUP = "steps"
 _SOURCES_GROUP = "sources"
@@ -123,6 +143,7 @@ _PREPROCESSED_TABLE = "preprocessed"
 
 _METADATA_ATTRS = ("pre_metadata", "post_metadata")
 _SOURCE_ATTRS = ("stu_id", "sth_id")
+_SOURCE_DATA_ATTRS = ("sampling_frequency", "additional_data")  # 1.4
 # Written on the primary table only when set; a file without it reads as the default source name.
 _SOURCE_NAME_ATTR = "source_name"
 _DEFAULT_SOURCE_NAME = "source1"
@@ -135,6 +156,7 @@ _KNOWN_PRIMARY_ATTRS = {
     *_METADATA_ATTRS,
     *_ADC_SETTING_ATTRS,
     *_SOURCE_ATTRS,
+    *_SOURCE_DATA_ATTRS,
     _SOURCE_NAME_ATTR,
 }
 # Attributes PyTables writes on every table it creates.
@@ -179,6 +201,10 @@ def _optional_int(attrs: h5py.AttributeManager, name: str) -> int | None:
         return int(_decode(value)) if isinstance(value, (bytes, str)) else int(value)
     except (TypeError, ValueError):
         raise ValueError(f"primary table attribute {name!r} must be an integer, got {value!r}") from None
+
+
+def _optional_float(attrs: h5py.AttributeManager, name: str) -> float | None:
+    return float(attrs[name]) if name in attrs else None
 
 
 # ── read: Recording ──────────────────────────────────────────────────────────
@@ -307,8 +333,15 @@ def _load_source_from_table(f: h5py.Group, table_name: str, name: str | None = N
 
     recording_data_kwargs = {
         "timestamp": table["timestamp"].tolist(),
-        "counter": table["counter"].tolist(),
+        "counter": table["counter"].tolist() if "counter" in table.dtype.names else [],
     }
+    quality = None
+    if _QUALITY_DATASET in f:
+        quality_ds = f[_QUALITY_DATASET]
+        quality = QualityChannel(
+            values=quality_ds[:].astype(np.float64).tolist(),
+            sampling_frequency=_optional_float(quality_ds.attrs, "sampling_frequency"),
+        )
     hardware_metadata_kwargs = {
         "adc_reference_voltage": _optional_str(table_ds.attrs, "adc_reference_voltage"),
         **{name: _optional_int(table_ds.attrs, name) for name in _ADC_SETTING_ATTRS},
@@ -322,6 +355,9 @@ def _load_source_from_table(f: h5py.Group, table_name: str, name: str | None = N
     source = Source(
         name=name or _optional_str(table_ds.attrs, _SOURCE_NAME_ATTR) or _DEFAULT_SOURCE_NAME,
         **{name: _optional_str(table_ds.attrs, name) for name in _SOURCE_ATTRS},
+        sampling_frequency=_optional_float(table_ds.attrs, "sampling_frequency"),
+        additional_data=_optional_str(table_ds.attrs, "additional_data"),
+        quality=quality,
         recording_metadata=RecordingMetadata(
             start_time=_decode(table_ds.attrs["Start_Time"]),
             **{name: _optional_str(table_ds.attrs, name) for name in _METADATA_ATTRS},
@@ -364,11 +400,16 @@ def _load_recording_v13(f: h5py.File) -> Recording:
     return Recording(sources=[_load_source_from_table(group[name], table_name, name) for name in names])
 
 
+def _load_recording_v14(f: h5py.File) -> Recording:
+    return _load_recording_v13(f) if "sources" in f.attrs else _load_recording_v1(f)
+
+
 _PARSERS = {
     "1.0": _load_recording_v1,
     "1.1": _load_recording_v1,
     "1.2": _load_recording_v1,
     "1.3": _load_recording_v13,
+    "1.4": _load_recording_v14,
 }
 
 
@@ -425,6 +466,11 @@ def _read_preprocessed_table(
     )
 
 
+def _has_sources_layout(f: h5py.File, version: str | None) -> bool:
+    """Whether the file stores its sources under `/sources/` (1.3, or 1.4 with several)."""
+    return version == _SOURCES_FORMAT_VERSION or (version == _FEATURES_FORMAT_VERSION and "sources" in f.attrs)
+
+
 def _load_preprocessed(f: h5py.File, path: str, recording: Recording) -> list[PreprocessedRecording]:
     """The preprocessed tables of a file (none for a file without any): the
     one at the root for a 1.1/1.2 file, one per source group that has one for
@@ -433,7 +479,7 @@ def _load_preprocessed(f: h5py.File, path: str, recording: Recording) -> list[Pr
     if version in (None, _BASE_FORMAT_VERSION) or "preprocessed_table" not in f.attrs:
         return []
     table_name = _decode(f.attrs["preprocessed_table"])
-    if version != _SOURCES_FORMAT_VERSION:
+    if not _has_sources_layout(f, version):
         return [_read_preprocessed_table(f, table_name, path, str(next(iter(recording.sources))))]
     tables = [
         _read_preprocessed_table(f[_SOURCES_GROUP][str(name)], table_name, path, str(name))
@@ -481,7 +527,9 @@ def _sensor_row(channel_metadata: ChannelMetadata, *, scaling_factor: float, off
     return row
 
 
-def _write_recording_table(f: h5py.Group, source: Source, table_name: str, *, store_name: bool = True) -> None:
+def _write_recording_table(
+    f: h5py.Group, source: Source, table_name: str, *, store_name: bool = True, always_name: bool = False
+) -> None:
     data = source.recording_data
     hardware = source.hardware_metadata
 
@@ -511,9 +559,15 @@ def _write_recording_table(f: h5py.Group, source: Source, table_name: str, *, st
         # of rows of empty strings and zeros, so the file reads back the same way.
         sensor_rows = []
 
-    dtype = [("counter", "u1"), ("timestamp", "<u8")] + [(slot, "<f4") for slot, _ in present_channels]
+    has_counter = bool(data.counter)
+    dtype = (
+        ([("counter", "u1")] if has_counter else [])
+        + [("timestamp", "<u8")]
+        + [(slot, "<f4") for slot, _ in present_channels]
+    )
     table = np.zeros(len(data.timestamp), dtype=dtype)
-    table["counter"] = data.counter
+    if has_counter:
+        table["counter"] = data.counter
     table["timestamp"] = data.timestamp
     for channel_slot, _metadata_slot in present_channels:
         table[channel_slot] = getattr(data, channel_slot)
@@ -530,8 +584,16 @@ def _write_recording_table(f: h5py.Group, source: Source, table_name: str, *, st
         value = getattr(source, name)
         if value is not None:
             ds.attrs[name] = value
-    if store_name and str(source.name) != _DEFAULT_SOURCE_NAME:
+    if store_name and (always_name or str(source.name) != _DEFAULT_SOURCE_NAME):
         ds.attrs[_SOURCE_NAME_ATTR] = str(source.name)
+    if source.sampling_frequency is not None:
+        ds.attrs["sampling_frequency"] = float(source.sampling_frequency)
+    if source.additional_data is not None:
+        ds.attrs["additional_data"] = source.additional_data
+    if source.quality is not None and source.quality.values:
+        quality_ds = _create_dataset(f, _QUALITY_DATASET, np.asarray(source.quality.values, dtype="<f4"))
+        if source.quality.sampling_frequency is not None:
+            quality_ds.attrs["sampling_frequency"] = float(source.quality.sampling_frequency)
     for name in _ADC_SETTING_ATTRS:
         value = getattr(hardware, name)
         if value is not None:
@@ -593,7 +655,10 @@ def _load_steps(
     2, ... A malformed step, or one whose `output_keys` aren't all in
     `computations` (e.g. because a malformed computation was skipped), is
     logged and dropped -- or raises with `on_error="raise"`."""
-    if _format_version(f, path) not in (_STEPS_FORMAT_VERSION, _SOURCES_FORMAT_VERSION) or _STEPS_GROUP not in f:
+    if (
+        _format_version(f, path) not in (_STEPS_FORMAT_VERSION, _SOURCES_FORMAT_VERSION, _FEATURES_FORMAT_VERSION)
+        or _STEPS_GROUP not in f
+    ):
         return []
     steps: list[ComputationStep] = []
     for node, step_group in f[_STEPS_GROUP].items():
@@ -614,13 +679,45 @@ def _load_steps(
     return [dataclasses.replace(step, step_index=i) for i, step in enumerate(steps)]
 
 
-def _write_recording(f: h5py.File, recording: Recording, table_name: str) -> bool:
+def _uses_source_features(recording: Recording) -> bool:
+    """Whether a source needs format 1.4: no packet counter, or a sampling
+    frequency, quality or additional data of its own."""
+    return any(
+        source.sampling_frequency is not None
+        or source.quality is not None
+        or source.additional_data is not None
+        or not source.recording_data.counter
+        for source in recording.sources.values()
+    )
+
+
+def _write_provenance(f: h5py.File, provenance: Provenance | None) -> None:
+    f.attrs["writer"] = software_id()
+    if provenance is not None:
+        for name in _PROVENANCE_ATTRS:
+            value = getattr(provenance, name)
+            if value is not None:
+                f.attrs[name] = str(value)
+
+
+def _read_provenance(f: h5py.File, version: str | None) -> Provenance:
+    """What the file says about where its data came from; a file that says nothing
+    is data read from HDF5 of its own format version."""
+    if "source_format" in f.attrs:
+        origin = {name: _optional_str(f.attrs, name) for name in _PROVENANCE_ATTRS}
+    else:
+        origin = {"source_format": "hdf5", "source_format_version": version or "legacy", "reader": software_id()}
+    return Provenance(**origin, writer=_optional_str(f.attrs, "writer"))
+
+
+def _write_recording(f: h5py.File, recording: Recording, table_name: str, *, features: bool = False) -> bool:
     """Write the sources of `recording`; returns whether it used the several-sources
-    layout (1.3). A single source is the primary table at the root."""
+    layout (1.3/1.4). A single source is the primary table at the root. With
+    `features` (1.4) a single source's name is always stored."""
     sources = list(recording.sources.values())
     f.attrs["primary_table"] = table_name
     if len(sources) == 1:
-        _write_recording_table(f, sources[0], table_name)
+        _write_recording_table(f, sources[0], table_name, always_name=features)
         return False
     f.attrs.create("sources", [str(source.name) for source in sources], dtype=h5py.string_dtype())
     group = f.create_group(_SOURCES_GROUP)
@@ -633,9 +730,14 @@ def save_recording(recording: Recording, path: str, *, table_name: str = "record
     """Write a Recording to a fresh HDF5 file: the base (1.0) format for one
     source, 1.3 for several."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+    features = _uses_source_features(recording)
     with h5py.File(path, "w") as f:
-        multiple = _write_recording(f, recording, table_name)
-        f.attrs["icoschema_format_version"] = _SOURCES_FORMAT_VERSION if multiple else _BASE_FORMAT_VERSION
+        multiple = _write_recording(f, recording, table_name, features=features)
+        if features:
+            f.attrs["icoschema_format_version"] = _FEATURES_FORMAT_VERSION
+        else:
+            f.attrs["icoschema_format_version"] = _SOURCES_FORMAT_VERSION if multiple else _BASE_FORMAT_VERSION
+        _write_provenance(f, None)
 
 
 # ── read/write: DerivedDataset / DatasetBundle ──────────────────────────────
@@ -685,7 +787,8 @@ def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "
     """Write a DatasetBundle: the recording as the primary table (or one per
     source), the preprocessed tables if any, every DerivedDataset under a
     `/computations/` group, each in its true N-D shape, and the steps under
-    `/steps/`. Uses the lowest sufficient format: 1.3 with several sources
+    `/steps/`. Uses the lowest sufficient format: 1.4 if a source needs it
+    (see the module docstring), 1.3 with several sources
     (preprocessed tables go into their source's group), else 1.2 with steps,
     else 1.1 with a preprocessed table, else 1.0.
 
@@ -694,9 +797,13 @@ def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "
     (`DatasetBundle.to_hdf5`)."""
     tables = _tables_by_source(bundle)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+    features = _uses_source_features(bundle.recording)
     with h5py.File(path, "w") as f:
-        multiple = _write_recording(f, bundle.recording, table_name)
-        if multiple:
+        multiple = _write_recording(f, bundle.recording, table_name, features=features)
+        _write_provenance(f, bundle.provenance)
+        if features:
+            f.attrs["icoschema_format_version"] = _FEATURES_FORMAT_VERSION
+        elif multiple:
             f.attrs["icoschema_format_version"] = _SOURCES_FORMAT_VERSION
         elif bundle.steps:
             f.attrs["icoschema_format_version"] = _STEPS_FORMAT_VERSION
@@ -748,7 +855,12 @@ def load_dataset_bundle(path: str, *, on_error: Literal["skip", "raise"] = "skip
             group.visititems(_visit)
 
         steps = _load_steps(f, path, computations, on_error)
+        provenance = _read_provenance(f, _format_version(f, path))
 
     return DatasetBundle(
-        recording=recording, preprocessed_tables=preprocessed_tables, computations=computations, steps=steps
+        recording=recording,
+        preprocessed_tables=preprocessed_tables,
+        computations=computations,
+        steps=steps,
+        provenance=provenance,
     )

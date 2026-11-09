@@ -44,9 +44,14 @@ bundle.to_hdf5("some_file.hdf5")
 `DatasetBundle.from_file(path)` takes either format, told apart by the file's first bytes. Like HDF5, reading dispatches
 on a format version, here the root property `icoschema_format_version`; a file without one is read with the *legacy*
 layout (`rawdata` group, `signalQuality` channels, one source per STU group), documented in
-`icoschema/storage/python/tdms.py`. The sampling frequency and the signal loss it derives are stored as JSON under the
-key `tdms` (`icoschema.storage.python.tdms.TDMS_METADATA_KEY`) of each source's `post_metadata`, since a TDMS waveform
-has no packet counter. There is no TDMS writer: save results with `to_hdf5`.
+`icoschema/storage/python/tdms.py`. A TDMS waveform has no packet counter, so a TDMS source has none: its
+`sampling_frequency` is `1 / wf_increment`, its `timestamp`s are built from it, its `quality` is the file's
+`signalQuality` channel (own rate; `Source.signal_loss_percentage` is `100 - mean(quality)`), each channel's `Sensor`
+has the TDMS channel name and `unit_string`, and `additional_data` (opaque JSON) keeps the file's, group's and
+channels' properties. Channels of a source must have equal length. `DatasetBundle.provenance` says where the data was
+read from (`source_format`, `source_format_version`, `reader`, and `writer` for an HDF5 file). Sources have independent
+clocks; `Recording.start_offsets()` and `Recording.time_axis(source)` place them against each other by their start
+times without touching their own timestamps. There is no TDMS writer: save results with `to_hdf5` (format `1.4`).
 
 ### Sources (STU/STH combinations)
 
@@ -187,6 +192,11 @@ producer.
   have `/steps/` and `/computations/`. Written only when the recording has more than one source: a single source keeps
   the `1.0`-`1.2` layout (its name and STU/STH ids are stored as optional table attributes), so those files stay
   readable by older versions. A preprocessed table, if a source has one, is stored in that source's group.
+- `1.4`: for sources that are not packet recordings (TDMS): the primary table may have no `counter` column and the
+  table attributes `sampling_frequency` and `additional_data`; a `quality` dataset (attribute `sampling_frequency`) sits
+  next to the table; a single source's name is always stored. Either layout (`sources` attribute or not) as in `1.0`-`1.3`.
+  Written only when a source needs it. Every file also gets the root attribute `writer`, and `source_format`,
+  `source_format_version`, `reader` when the bundle has a provenance (older readers ignore them).
 - Legacy files (no version, table `acceleration`) are read as before.
 - A file with an empty or missing `sensors` table (old recordings) is read with an unspecified `Sensor()` (every field
   `None`) per channel and no conversion, as long as its `conversion` attribute is `true`; if it isn't, there is no

@@ -5,8 +5,7 @@ Like the HDF5 adapter, read dispatches on a format version, here the root
 property `icoschema_format_version` of the TDMS file:
 
 - Absent: the "legacy" layout of the files written before TDMS files were
-  versioned. This is the reader that used to live in `icocompute.tdms`,
-  moved here unchanged (see below).
+  versioned (below).
 - Present: parsed by the version-specific parser registered in `_PARSERS`
   (none yet). Any other version is rejected, so an older reader never
   silently misreads a newer file.
@@ -14,31 +13,36 @@ property `icoschema_format_version` of the TDMS file:
 **Legacy layout.** The deliberately simple mapping:
 
 - The `rawdata` group's channels (1 to 3, file order) become `channel1..3`,
-  values as stored. Channels of unequal length are cut to the shortest
-  (`dropped_rows` in the metadata says how much).
+  values as nptdms returns them (scaled by the channel's NI scaling, if it
+  has one, so they are already in `unit_string`; hence `NoConversion`; the
+  original scaling stays in `additional_data`). Channels of one source must
+  have the same length (an error otherwise: nothing is cut).
+- Each channel's `Sensor` has `name` = the TDMS channel name and `unit` =
+  its `unit_string`, nothing else.
 - The sampling frequency is `1 / wf_increment` of those channels (they must
-  agree). It, and the loss below, are stored as JSON in
-  `recording_metadata.post_metadata` under `TDMS_METADATA_KEY` (`"tdms"`).
-- A TDMS waveform is gap-free by construction, so `timestamp` is
-  `round(i * 1e6 / fs)` and `counter` is `i % 256` (no gaps). Packet loss is
-  therefore NOT visible in `counter`; it comes from the `signalQuality`
-  channels (100 = nothing lost): a `system` group's channel applies to the
-  whole file, otherwise every other group holding a `signalQuality` channel
-  is paired with a `rawdata` channel (by name prefix, else by file order).
-  Loss per channel is `100 - mean(quality)`, the recording's the worst of
-  them. Without usable quality data the loss is an assumed 0
-  (`signal_loss_measured` is `False`).
-- No sensors or conversions: every channel gets an empty `Sensor` and
-  `NoConversion`.
+  agree); it is the source's `sampling_frequency`. A TDMS waveform has no
+  packet counter and is gap-free, so the source has none, and `timestamp` is
+  `round(i * 1e6 / fs)`.
+- Packet loss comes from the `signalQuality` channels (100 = nothing lost),
+  which become the source's `quality` (with its own `wf_increment` as
+  sampling frequency): a `system` group's channel applies to the whole file,
+  otherwise every other group holding a `signalQuality` channel is paired
+  with a `rawdata` channel and the worst of them is kept. `Source` derives
+  the loss as `100 - mean(quality)`. Without usable quality data the source
+  has no `quality` and its loss is an assumed 0 (`signal_loss_measured` is
+  `False`).
+- `start_time` is the first channel's `wf_start_time` plus its
+  `wf_start_offset`.
 - **Several STUs**: when no `system` group holds a `signalQuality` channel,
   two or more other groups do, and every `rawdata` channel name starts with
   exactly one of those groups' names (the longest match, e.g. `STU1_Channel1`
   belongs to group `STU1`), each such group is its own `Source` named after
   the group, with `stu_id` set to it. The sources don't share anything: each
-  has its own channels (file order, at most 3), `wf_increment` (hence rate),
-  length (`dropped_rows` is per source), start time and signal loss (100 - mean
-  of its group's `signalQuality`), all in that source's `post_metadata`. Any
-  other file is one source, as above (named `source1`).
+  has its own channels (file order, at most 3), rate, length, start time and
+  quality. Any other file is one source (named `source1`).
+- `additional_data` (JSON) of every source holds the properties nothing else
+  keeps: `file` (root), `group` (the source's `system` or STU group),
+  `channels` (by name) and `other_groups` (e.g. `info`).
 
 TDMS is read-only: there is no writer. Needs `nptdms` (the `tdms` extra).
 
@@ -49,6 +53,7 @@ ICOschema.model.python.dataset_bundle.DatasetBundle.from_tdms() instead.
 
 from __future__ import annotations
 
+import datetime
 import json
 import warnings
 from collections.abc import Callable
@@ -58,11 +63,8 @@ import numpy as np
 
 from icoschema.schema.generated.python import dataset as generated
 
-TDMS_METADATA_KEY = "tdms"
-"""Key in `recording_metadata.post_metadata` (a JSON object) under which the
-legacy reader stores the sampling frequency and signal loss of the file."""
-
 FORMAT_VERSION_PROPERTY = "icoschema_format_version"
+LEGACY_VERSION = "legacy"
 
 RAW_GROUP = "rawdata"
 SYSTEM_GROUP = "system"
@@ -72,43 +74,73 @@ MAX_CHANNELS = 3
 _DEFAULT_SOURCE_NAME = "source1"
 
 
-def _quality_loss(channel: Any) -> float | None:
-    """`100 - mean(quality)` of one `signalQuality` channel, `None` if it holds
+def _jsonable(value: Any) -> Any:
+    """`value` as something `json.dumps` accepts (timestamps as ISO text)."""
+    if isinstance(value, np.datetime64):
+        return str(np.datetime_as_string(value, unit="us"))
+    if isinstance(value, datetime.datetime | datetime.date):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    if isinstance(value, np.generic):
+        return _jsonable(value.item())
+    if isinstance(value, float) and not np.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple | np.ndarray):
+        return [_jsonable(item) for item in value]
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    return str(value)
+
+
+def _properties(obj: Any) -> dict[str, Any]:
+    return {str(key): _jsonable(value) for key, value in obj.properties.items()}
+
+
+def _quality(channel: Any) -> generated.QualityChannel | None:
+    """The `signalQuality` channel as a `QualityChannel`, `None` if it holds
     no numeric data (e.g. the empty void-typed channel some files have)."""
     try:
         data = np.asarray(channel[:])
     except Exception:  # noqa: BLE001 -- unreadable -> unknown
         return None
-    if data.size == 0 or not np.issubdtype(data.dtype, np.number):
+    if data.size == 0 or not np.issubdtype(data.dtype, np.number) or not np.isfinite(data.astype(np.float64)).any():
         return None
-    finite = data[np.isfinite(data)].astype(np.float64)
-    if finite.size == 0:
-        return None
-    return float(np.clip(100.0 - finite.mean(), 0.0, 100.0))
+    increment = channel.properties.get("wf_increment")
+    rate = 1.0 / float(increment) if increment is not None and float(increment) > 0 else None
+    return generated.QualityChannel(values=data.astype(np.float64).tolist(), sampling_frequency=rate)
 
 
-def _channel_losses(tdms: Any, raw_names: list[str]) -> tuple[str, list[float | None]]:
-    """`(source, loss per raw channel)`; `source` is `system`, `groups` or `none`."""
+def _mean_quality(quality: generated.QualityChannel) -> float:
+    values = np.asarray(quality.values, dtype=np.float64)
+    return float(values[np.isfinite(values)].mean())
+
+
+def _worst(candidates: list[generated.QualityChannel | None]) -> generated.QualityChannel | None:
+    usable = [quality for quality in candidates if quality is not None]
+    return min(usable, key=_mean_quality) if usable else None
+
+
+def _file_quality(tdms: Any, raw_count: int) -> tuple[generated.QualityChannel | None, Any | None]:
+    """`(quality, group it came from)` of a single-source file: the `system`
+    group's, else the worst of the other groups' (one per raw channel)."""
     groups = {group.name: group for group in tdms.groups()}
     system = groups.get(SYSTEM_GROUP)
     if system is not None and QUALITY_CHANNEL in system:
-        return "system", [_quality_loss(system[QUALITY_CHANNEL])] * len(raw_names)
+        return _quality(system[QUALITY_CHANNEL]), system
     holders = [g for g in groups.values() if g.name != RAW_GROUP and QUALITY_CHANNEL in g]
     if not holders:
-        return "none", [None] * len(raw_names)
-    if len(holders) != len(raw_names):
+        return None, None
+    if len(holders) != raw_count:
         warnings.warn(
-            f"{len(holders)} groups hold {QUALITY_CHANNEL} but {RAW_GROUP} has {len(raw_names)} channel(s); "
+            f"{len(holders)} groups hold {QUALITY_CHANNEL} but {RAW_GROUP} has {raw_count} channel(s); "
             "signal loss is assumed 0",
             stacklevel=4,
         )
-        return "none", [None] * len(raw_names)
-    by_prefix = [[g for g in holders if name.startswith(g.name)] for name in raw_names]
-    if all(len(match) == 1 for match in by_prefix) and len({m[0].name for m in by_prefix}) == len(holders):
-        ordered = [match[0] for match in by_prefix]
-    else:
-        ordered = holders
-    return "groups", [_quality_loss(group[QUALITY_CHANNEL]) for group in ordered]
+        return None, None
+    return _worst([_quality(group[QUALITY_CHANNEL]) for group in holders]), None
 
 
 def _split_by_stu(tdms: Any, channels: list[Any]) -> dict[str, list[Any]] | None:
@@ -133,16 +165,16 @@ def _split_by_stu(tdms: Any, channels: list[Any]) -> dict[str, list[Any]] | None
 
 
 class _Read:
-    """What `_read_channels` found: the rate, the values cut to the shortest
-    channel, how many rows that dropped and the first channel's start time."""
+    """What `_read_channels` found: the rate, the channel values, the number
+    of rows and the first channel's start time."""
 
-    def __init__(self, fs: float, columns: list[list[float]], rows: int, dropped: int, start_time: str | None) -> None:
-        self.fs, self.columns, self.rows, self.dropped, self.start_time = fs, columns, rows, dropped, start_time
+    def __init__(self, fs: float, columns: list[list[float]], rows: int, start_time: str | None) -> None:
+        self.fs, self.columns, self.rows, self.start_time = fs, columns, rows, start_time
 
 
 def _read_channels(path: str, where: str, channels: list[Any]) -> _Read:
     """Reads waveform `channels` (all of one STU) that must agree on
-    `wf_increment`. `where` names them in error messages."""
+    `wf_increment` and length. `where` names them in error messages."""
     if len(channels) > MAX_CHANNELS:
         raise ValueError(f"{path}: {len(channels)} channels in {where!r}, at most {MAX_CHANNELS} are supported")
     increments = []
@@ -156,32 +188,52 @@ def _read_channels(path: str, where: str, channels: list[Any]) -> _Read:
     fs = 1.0 / increments[0]
 
     data = [np.asarray(channel[:]) for channel in channels]
-    rows = min(len(values) for values in data)
+    lengths = [len(values) for values in data]
+    if len(set(lengths)) != 1:
+        raise ValueError(f"{path}: {where!r} channels have different lengths {lengths}")
+    rows = lengths[0]
     if rows == 0:
         raise ValueError(f"{path}: the {where!r} channels hold no data")
-    dropped = sum(len(values) - rows for values in data)
-    columns = [values[:rows].astype(np.float64).tolist() for values in data]
+    columns = [values.astype(np.float64).tolist() for values in data]
 
     start = channels[0].properties.get("wf_start_time")
-    start_time = str(np.datetime_as_string(np.datetime64(start, "us"), unit="us")) if start is not None else None
-    return _Read(fs, columns, rows, dropped, start_time)
+    start_time = None
+    if start is not None:
+        begin = np.datetime64(start, "us")
+        offset = channels[0].properties.get("wf_start_offset")
+        if offset is not None and float(offset) != 0.0:
+            begin = begin + np.timedelta64(round(float(offset) * 1e6), "us")
+        start_time = str(np.datetime_as_string(begin, unit="us"))
+    return _Read(fs, columns, rows, start_time)
 
 
-def _build(
-    read: _Read, section: dict[str, Any]
-) -> tuple[generated.HardwareMetadata, generated.RecordingMetadata, generated.RecordingData]:
-    """The three parts of a `Source` for one STU's `read`."""
+def _source(
+    name: str,
+    stu_id: str | None,
+    read: _Read,
+    channels: list[Any],
+    quality: generated.QualityChannel | None,
+    additional_data: dict[str, Any],
+) -> generated.Source:
+    def metadata(channel: Any) -> generated.ChannelMetadata:
+        unit = channel.properties.get("unit_string") or None
+        return generated.ChannelMetadata(
+            sensor=generated.Sensor(name=channel.name, unit=str(unit) if unit is not None else None),
+            compensations=[generated.NoConversion(order=0)],
+        )
 
-    def metadata() -> generated.ChannelMetadata:
-        return generated.ChannelMetadata(sensor=generated.Sensor(), compensations=[generated.NoConversion(order=0)])
-
-    count = len(read.columns)
-    return (
-        generated.HardwareMetadata(**{f"channel{i + 1}_metadata": metadata() for i in range(count)}),
-        generated.RecordingMetadata(start_time=read.start_time, post_metadata=json.dumps({TDMS_METADATA_KEY: section})),
-        generated.RecordingData(
+    return generated.Source(
+        name=name,
+        stu_id=stu_id,
+        sampling_frequency=read.fs,
+        quality=quality,
+        additional_data=json.dumps(additional_data),
+        hardware_metadata=generated.HardwareMetadata(
+            **{f"channel{i + 1}_metadata": metadata(channel) for i, channel in enumerate(channels)}
+        ),
+        recording_metadata=generated.RecordingMetadata(start_time=read.start_time),
+        recording_data=generated.RecordingData(
             timestamp=np.rint(np.arange(read.rows) * 1e6 / read.fs).astype(np.int64).tolist(),
-            counter=(np.arange(read.rows) % 256).tolist(),
             **{f"channel{i + 1}": column for i, column in enumerate(read.columns)},
         ),
     )
@@ -198,32 +250,34 @@ def _source_name(group: str, taken: set[str]) -> str:
     return unique
 
 
+def _additional_data(tdms: Any, own_group: Any | None, channels: list[Any], data_groups: set[str]) -> dict[str, Any]:
+    """The properties of the file, the source's group, its channels and the
+    groups that hold no data (e.g. `info`), as `Source.additional_data`."""
+    return {
+        "file": _properties(tdms),
+        "group": _properties(own_group) if own_group is not None else None,
+        "channels": {channel.name: _properties(channel) for channel in channels},
+        "other_groups": {g.name: _properties(g) for g in tdms.groups() if g.name not in data_groups},
+    }
+
+
 def _load_stus(path: str, tdms: Any, members: dict[str, list[Any]]) -> generated.Recording:
     """One `Source` per STU group (see the module docstring)."""
     groups = {g.name: g for g in tdms.groups()}
+    data_groups = {RAW_GROUP, *members}
     sources = []
     taken: set[str] = set()
     for group, channels in members.items():
         read = _read_channels(path, f"{RAW_GROUP} ({group})", channels)
-        loss = _quality_loss(groups[group][QUALITY_CHANNEL])
-        section = {
-            "sampling_frequency": read.fs,
-            "signal_loss_percentage": loss if loss is not None else 0.0,
-            "signal_loss_measured": loss is not None,
-            "signal_quality_source": "group",
-            "channel_signal_loss_percentage": [loss] * len(channels),
-            "channels": [channel.name for channel in channels],
-            "dropped_rows": read.dropped,
-            "group": group,
-        }
-        hardware, recording_metadata, recording_data = _build(read, section)
+        quality = _quality(groups[group][QUALITY_CHANNEL])
         sources.append(
-            generated.Source(
-                name=_source_name(group, taken),
-                stu_id=group,
-                hardware_metadata=hardware,
-                recording_metadata=recording_metadata,
-                recording_data=recording_data,
+            _source(
+                _source_name(group, taken),
+                group,
+                read,
+                channels,
+                quality,
+                _additional_data(tdms, groups[group], channels, data_groups),
             )
         )
     return generated.Recording(sources=sources)
@@ -241,25 +295,17 @@ def _load_recording_legacy(path: str, tdms: Any) -> generated.Recording:
         return _load_stus(path, tdms, members)
 
     read = _read_channels(path, RAW_GROUP, channels)
-    source, losses = _channel_losses(tdms, [channel.name for channel in channels])
-    known = [loss for loss in losses if loss is not None]
-    section = {
-        "sampling_frequency": read.fs,
-        "signal_loss_percentage": max(known) if known else 0.0,
-        "signal_loss_measured": bool(known),
-        "signal_quality_source": source,
-        "channel_signal_loss_percentage": losses,
-        "channels": [channel.name for channel in channels],
-        "dropped_rows": read.dropped,
-    }
-    hardware, recording_metadata, recording_data = _build(read, section)
+    quality, own_group = _file_quality(tdms, len(channels))
+    data_groups = {RAW_GROUP} | ({own_group.name} if own_group is not None else set())
     return generated.Recording(
         sources=[
-            generated.Source(
-                name=_DEFAULT_SOURCE_NAME,
-                hardware_metadata=hardware,
-                recording_metadata=recording_metadata,
-                recording_data=recording_data,
+            _source(
+                _DEFAULT_SOURCE_NAME,
+                None,
+                read,
+                channels,
+                quality,
+                _additional_data(tdms, own_group, channels, data_groups),
             )
         ]
     )
@@ -282,10 +328,11 @@ def _format_version(tdms: Any, path: str) -> str | None:
     return version
 
 
-def load_recording(path: str) -> generated.Recording:
-    """The recording in the TDMS file at `path`. Raises `ValueError` for a
-    file without a usable `rawdata` group or with an unknown format version,
-    and `ImportError` if `nptdms` isn't installed."""
+def load(path: str) -> tuple[generated.Recording, str]:
+    """The recording in the TDMS file at `path` and the format version it was
+    read as (`LEGACY_VERSION` for a file without one). Raises `ValueError` for
+    a file without a usable `rawdata` group or with an unknown format
+    version, and `ImportError` if `nptdms` isn't installed."""
     try:
         from nptdms import TdmsFile  # type: ignore[import-untyped]
     except ImportError as error:
@@ -294,5 +341,10 @@ def load_recording(path: str) -> generated.Recording:
     tdms = TdmsFile.read(path)
     version = _format_version(tdms, path)
     if version is None:
-        return _load_recording_legacy(path, tdms)
-    return _PARSERS[version](path, tdms)
+        return _load_recording_legacy(path, tdms), LEGACY_VERSION
+    return _PARSERS[version](path, tdms), version
+
+
+def load_recording(path: str) -> generated.Recording:
+    """`load(path)` without the version."""
+    return load(path)[0]

@@ -26,6 +26,7 @@ else here.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 import numpy as np
@@ -38,6 +39,10 @@ from icoschema.schema.generated.python import dataset as generated
 # the total sampling frequency is 38.4 MHz / (3 * 21 * 64) = 9523.8095... Hz.
 ADC_CLOCK_HZ = 38_400_000
 DEFAULT_ADC_SETTINGS = (2, 8, 64)
+
+# Files saved by icocompute from TDMS files before `Source.sampling_frequency` and `Source.quality` existed
+# keep the rate and the loss as JSON under this key of `post_metadata`; `Source` still understands it.
+LEGACY_TDMS_KEY = "tdms"
 
 
 def _lost_packets(counter: np.ndarray) -> np.ndarray:
@@ -54,8 +59,13 @@ class Source(generated.Source):
     """One acquisition source (STU/STH combination) of a `Recording`.
 
     Has every field of `ICOschema.schema.generated.python.dataset.Source`
-    (`name`, `stu_id`, `sth_id`, `hardware_metadata`, `recording_metadata`,
+    (`name`, `stu_id`, `sth_id`, `sampling_frequency`, `quality`,
+    `additional_data`, `hardware_metadata`, `recording_metadata`,
     `recording_data`), plus the getters and calculations below.
+
+    A source is either packet-based (HDF5: `counter` and ADC settings give the
+    sampling frequency and the packet loss) or a plain waveform (TDMS: no
+    counter, `sampling_frequency` is set and loss comes from `quality`).
     """
 
     def __post_init__(self, *args: Any, **kwargs: Any) -> None:
@@ -86,8 +96,49 @@ class Source(generated.Source):
 
     @property
     def counter(self) -> np.ndarray:
-        """recording_data.counter as a numpy array (an 8-bit wrapping packet counter)."""
+        """recording_data.counter as a numpy array (an 8-bit wrapping packet
+        counter). Empty for a source without a packet counter (`has_counter`)."""
         return np.asarray(self.recording_data.counter, dtype=int)
+
+    @property
+    def has_counter(self) -> bool:
+        """Whether this source has a packet counter (a TDMS source has none)."""
+        return len(self.recording_data.counter) > 0
+
+    def _legacy_tdms(self) -> dict[str, Any] | None:
+        """The JSON section older icocompute versions kept in `post_metadata`
+        for files read from TDMS (see `LEGACY_TDMS_KEY`), if present."""
+        raw = self.recording_metadata.post_metadata
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        section = parsed.get(LEGACY_TDMS_KEY) if isinstance(parsed, dict) else None
+        return section if isinstance(section, dict) else None
+
+    def quality_loss_percentage(self) -> float | None:
+        """`100 - mean(quality)` (clipped to 0..100) of `quality`, `None` if
+        there is no usable quality data (none, empty or only non-finite)."""
+        if self.quality is None:
+            return None
+        values = np.asarray(self.quality.values, dtype=np.float64)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return None
+        return float(np.clip(100.0 - values.mean(), 0.0, 100.0))
+
+    @property
+    def signal_loss_measured(self) -> bool:
+        """Whether `signal_loss_percentage` is measured (from `quality` or the
+        packet counter) rather than an assumed 0 (a source with neither)."""
+        if self.quality_loss_percentage() is not None:
+            return True
+        legacy = self._legacy_tdms()
+        if legacy is not None and "signal_loss_percentage" in legacy:
+            return bool(legacy.get("signal_loss_measured", False))
+        return self.has_counter
 
     @property
     def channel_count(self) -> int:
@@ -96,8 +147,12 @@ class Source(generated.Source):
 
     @property
     def signal_loss_percentage(self) -> float:
-        """Percentage of packets lost, inferred from gaps/wraparounds in `counter`.
+        """Percentage of data lost.
 
+        From `quality` if the source has it (`100 - mean(quality)`); else, for
+        a source without a packet counter, 0 (an assumption: see
+        `signal_loss_measured`); else inferred from gaps/wraparounds in
+        `counter`, as described next.
 
         `counter` is an 8-bit counter (wraps 255 -> 0) that increments once per
         packet; a jump of more than 1 between consecutive samples (accounting
@@ -110,6 +165,14 @@ class Source(generated.Source):
         would be divided by received rows and multi-row recordings would
         under-report their loss.
         """
+        from_quality = self.quality_loss_percentage()
+        if from_quality is not None:
+            return from_quality
+        legacy = self._legacy_tdms()
+        if legacy is not None and "signal_loss_percentage" in legacy:
+            return float(legacy["signal_loss_percentage"])
+        if not self.has_counter:
+            return 0.0
         counter = self.counter
         total_lost = int(np.sum(_lost_packets(counter)))
         total_received = int(np.count_nonzero(np.diff(counter))) + 1
@@ -128,6 +191,8 @@ class Source(generated.Source):
         grid placement would be misaligned.
         """
         counter = self.counter
+        if counter.size == 0 and self.timestamps.size > 0:
+            return 1  # no packets: every row is its own
         if counter.size == 0:
             raise ValueError("cannot infer rows per packet from an empty counter")
         boundaries = np.flatnonzero(np.diff(counter) != 0) + 1
@@ -146,15 +211,19 @@ class Source(generated.Source):
         Row `i` lands at `i` plus every row lost to dropped packets before
         it, so the first row is position 0 and the grid's length is
         `sample_index()[-1] + 1`. A `PreprocessedRecording`'s row `j` is grid
-        position `j`. Raises like `rows_per_packet()`.
+        position `j`. Raises like `rows_per_packet()`. Without a packet
+        counter every row is a position of its own (`0, 1, 2, ...`).
         """
         counter = self.counter
+        if counter.size == 0 and self.timestamps.size > 0:
+            return np.arange(self.timestamps.size, dtype=np.int64)
         lost_rows = _lost_packets(counter) * self.rows_per_packet()
         return np.arange(counter.size, dtype=np.int64) + np.concatenate(([0], np.cumsum(lost_rows))).astype(np.int64)
 
     def filled_mask(self) -> np.ndarray:
         """Boolean mask over the gap-free grid: `True` at positions no row was
-        received for (lost packets), `False` at received rows."""
+        received for (lost packets), `False` at received rows. All `False`
+        without a packet counter."""
         index = self.sample_index()
         mask = np.ones(int(index[-1]) + 1, dtype=bool)
         mask[index] = False
@@ -169,7 +238,13 @@ class Source(generated.Source):
         (`"hardware"`) if all three are recorded, else from the default ADC
         settings (`"default"`). Raises `ValueError` if only some are recorded
         or a setting is out of range, rather than guessing.
+
+        A source with its own `sampling_frequency` (TDMS) reports that times
+        `channel_count` as `"hardware"`.
         """
+        own = self._own_sampling_frequency()
+        if own is not None:
+            return own * max(self.channel_count, 1), "hardware"
         hardware = self.hardware_metadata
         settings = (hardware.adc_prescaler, hardware.adc_acquisition_time, hardware.adc_oversample_rate)
         if all(value is None for value in settings):
@@ -190,10 +265,24 @@ class Source(generated.Source):
             )
         return ADC_CLOCK_HZ / ((prescaler + 1) * (acquisition_time + 13) * oversample_rate), source
 
+    def _own_sampling_frequency(self) -> float | None:
+        """The per-channel rate the source's data states (`sampling_frequency`,
+        or the legacy TDMS section), `None` if it has to follow from ADC settings."""
+        if self.sampling_frequency is not None:
+            return float(self.sampling_frequency)
+        legacy = self._legacy_tdms()
+        if legacy is not None and "sampling_frequency" in legacy:
+            return float(legacy["sampling_frequency"])
+        return None
+
     def channel_sampling_frequency(self) -> tuple[float, Literal["hardware", "default"]]:
-        """The per-channel sampling frequency in Hz -- `total_sampling_frequency()`
-        divided by `channel_count` -- and where it came from. Raises
+        """The per-channel sampling frequency in Hz and where it came from:
+        the source's own `sampling_frequency` if it has one (`"hardware"`),
+        else `total_sampling_frequency()` divided by `channel_count`. Raises
         `ValueError` for a recording without channels."""
+        own = self._own_sampling_frequency()
+        if own is not None:
+            return own, "hardware"
         if self.channel_count == 0:
             raise ValueError("recording has no channels to split the sampling frequency across")
         total, source = self.total_sampling_frequency()
@@ -231,23 +320,30 @@ class Source(generated.Source):
 
         return {
             "start_time": self.recording_metadata.start_time,
-            "sample_count": len(self.counter),
+            "sample_count": len(self.timestamps),
             "signal_loss_percentage": float(self.signal_loss_percentage),
+            "signal_loss_measured": self.signal_loss_measured,
             "channels": channels,
         }
 
+    def start_datetime(self) -> np.datetime64 | None:
+        """`recording_metadata.start_time` as a `datetime64[us]`, `None` if the
+        source has none."""
+        start = self.recording_metadata.start_time
+        return np.datetime64(start, "us") if start else None
+
     def to_dataframe(self) -> pd.DataFrame:
-        """recording_data as a DataFrame (columns: timestamp, counter, channel1, and channel2/channel3 if present).
+        """recording_data as a DataFrame (columns: timestamp, counter if the
+        source has one, channel1, and channel2/channel3 if present).
 
         Values are raw and uncompensated -- see the module docstring's note
         on Compensation/Conversion.
         """
         data = self.recording_data
-        columns = {
-            "timestamp": data.timestamp,
-            "counter": data.counter,
-            "channel1": data.channel1,
-        }
+        columns: dict[str, Any] = {"timestamp": data.timestamp}
+        if data.counter:
+            columns["counter"] = data.counter
+        columns["channel1"] = data.channel1
         if data.channel2:
             columns["channel2"] = data.channel2
         if data.channel3:

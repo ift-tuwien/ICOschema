@@ -1,5 +1,5 @@
 # Auto generated from dataset.yaml by pythongen.py version: 0.0.1
-# Generation date: 2026-11-09T12:30:19
+# Generation date: 2026-11-09T15:59:28
 # Schema: dataset
 #
 # id: dataset_schema
@@ -384,8 +384,8 @@ class RecordingData(YAMLRoot):
     class_model_uri: ClassVar[URIRef] = DATASET.RecordingData
 
     timestamp: Union[int, list[int]] = None
-    counter: Union[int, list[int]] = None
     channel1: Union[float, list[float]] = None
+    counter: Optional[Union[int, list[int]]] = empty_list()
     channel2: Optional[Union[float, list[float]]] = empty_list()
     channel3: Optional[Union[float, list[float]]] = empty_list()
 
@@ -396,17 +396,15 @@ class RecordingData(YAMLRoot):
             self.timestamp = [self.timestamp] if self.timestamp is not None else []
         self.timestamp = [v if isinstance(v, int) else int(v) for v in self.timestamp]
 
-        if self._is_empty(self.counter):
-            self.MissingRequiredField("counter")
-        if not isinstance(self.counter, list):
-            self.counter = [self.counter] if self.counter is not None else []
-        self.counter = [v if isinstance(v, int) else int(v) for v in self.counter]
-
         if self._is_empty(self.channel1):
             self.MissingRequiredField("channel1")
         if not isinstance(self.channel1, list):
             self.channel1 = [self.channel1] if self.channel1 is not None else []
         self.channel1 = [v if isinstance(v, float) else float(v) for v in self.channel1]
+
+        if not isinstance(self.counter, list):
+            self.counter = [self.counter] if self.counter is not None else []
+        self.counter = [v if isinstance(v, int) else int(v) for v in self.counter]
 
         if not isinstance(self.channel2, list):
             self.channel2 = [self.channel2] if self.channel2 is not None else []
@@ -439,6 +437,9 @@ class Source(YAMLRoot):
     recording_data: Union[dict, RecordingData] = None
     stu_id: Optional[str] = None
     sth_id: Optional[str] = None
+    sampling_frequency: Optional[float] = None
+    quality: Optional[Union[dict, "QualityChannel"]] = None
+    additional_data: Optional[str] = None
 
     def __post_init__(self, *_: str, **kwargs: Any):
         if self._is_empty(self.name):
@@ -466,6 +467,44 @@ class Source(YAMLRoot):
 
         if self.sth_id is not None and not isinstance(self.sth_id, str):
             self.sth_id = str(self.sth_id)
+
+        if self.sampling_frequency is not None and not isinstance(self.sampling_frequency, float):
+            self.sampling_frequency = float(self.sampling_frequency)
+
+        if self.quality is not None and not isinstance(self.quality, QualityChannel):
+            self.quality = QualityChannel(**as_dict(self.quality))
+
+        if self.additional_data is not None and not isinstance(self.additional_data, str):
+            self.additional_data = str(self.additional_data)
+
+        super().__post_init__(**kwargs)
+
+
+@dataclass(repr=False)
+class QualityChannel(YAMLRoot):
+    """
+    A signal-quality series of one source: percentages, 100 meaning nothing was lost. Sampled independently of the
+    source's channels.
+    """
+    _inherited_slots: ClassVar[list[str]] = []
+
+    class_class_uri: ClassVar[URIRef] = DATASET["QualityChannel"]
+    class_class_curie: ClassVar[str] = "dataset:QualityChannel"
+    class_name: ClassVar[str] = "QualityChannel"
+    class_model_uri: ClassVar[URIRef] = DATASET.QualityChannel
+
+    values: Union[float, list[float]] = None
+    sampling_frequency: Optional[float] = None
+
+    def __post_init__(self, *_: str, **kwargs: Any):
+        if self._is_empty(self.values):
+            self.MissingRequiredField("values")
+        if not isinstance(self.values, list):
+            self.values = [self.values] if self.values is not None else []
+        self.values = [v if isinstance(v, float) else float(v) for v in self.values]
+
+        if self.sampling_frequency is not None and not isinstance(self.sampling_frequency, float):
+            self.sampling_frequency = float(self.sampling_frequency)
 
         super().__post_init__(**kwargs)
 
@@ -712,6 +751,39 @@ class ComputationStep(YAMLRoot):
 
 
 @dataclass(repr=False)
+class Provenance(YAMLRoot):
+    """
+    Where a DatasetBundle was read from and by what it was written.
+    """
+    _inherited_slots: ClassVar[list[str]] = []
+
+    class_class_uri: ClassVar[URIRef] = DATASET["Provenance"]
+    class_class_curie: ClassVar[str] = "dataset:Provenance"
+    class_name: ClassVar[str] = "Provenance"
+    class_model_uri: ClassVar[URIRef] = DATASET.Provenance
+
+    source_format: Optional[str] = None
+    source_format_version: Optional[str] = None
+    reader: Optional[str] = None
+    writer: Optional[str] = None
+
+    def __post_init__(self, *_: str, **kwargs: Any):
+        if self.source_format is not None and not isinstance(self.source_format, str):
+            self.source_format = str(self.source_format)
+
+        if self.source_format_version is not None and not isinstance(self.source_format_version, str):
+            self.source_format_version = str(self.source_format_version)
+
+        if self.reader is not None and not isinstance(self.reader, str):
+            self.reader = str(self.reader)
+
+        if self.writer is not None and not isinstance(self.writer, str):
+            self.writer = str(self.writer)
+
+        super().__post_init__(**kwargs)
+
+
+@dataclass(repr=False)
 class DatasetBundle(YAMLRoot):
     """
     A Recording together with its optional PreprocessedRecordings (at most one per source), every DerivedDataset
@@ -725,6 +797,7 @@ class DatasetBundle(YAMLRoot):
     class_model_uri: ClassVar[URIRef] = DATASET.DatasetBundle
 
     recording: Union[dict, Recording] = None
+    provenance: Optional[Union[dict, Provenance]] = None
     preprocessed_tables: Optional[Union[Union[dict, PreprocessedRecording], list[Union[dict, PreprocessedRecording]]]] = empty_list()
     computations: Optional[Union[dict[Union[str, DerivedDatasetKey], Union[dict, DerivedDataset]], list[Union[dict, DerivedDataset]]]] = empty_dict()
     steps: Optional[Union[dict[Union[str, ComputationStepNode], Union[dict, ComputationStep]], list[Union[dict, ComputationStep]]]] = empty_dict()
@@ -734,6 +807,9 @@ class DatasetBundle(YAMLRoot):
             self.MissingRequiredField("recording")
         if not isinstance(self.recording, Recording):
             self.recording = Recording(**as_dict(self.recording))
+
+        if self.provenance is not None and not isinstance(self.provenance, Provenance):
+            self.provenance = Provenance(**as_dict(self.provenance))
 
         self._normalize_inlined_as_list(slot_name="preprocessed_tables", slot_type=PreprocessedRecording, key_name="timestamp", keyed=False)
 
@@ -866,7 +942,7 @@ slots.recordingData__timestamp = Slot(uri=DATASET.timestamp, name="recordingData
                    model_uri=DATASET.recordingData__timestamp, domain=None, range=Union[int, list[int]])
 
 slots.recordingData__counter = Slot(uri=DATASET.counter, name="recordingData__counter", curie=DATASET.curie('counter'),
-                   model_uri=DATASET.recordingData__counter, domain=None, range=Union[int, list[int]])
+                   model_uri=DATASET.recordingData__counter, domain=None, range=Optional[Union[int, list[int]]])
 
 slots.recordingData__channel1 = Slot(uri=DATASET.channel1, name="recordingData__channel1", curie=DATASET.curie('channel1'),
                    model_uri=DATASET.recordingData__channel1, domain=None, range=Union[float, list[float]])
@@ -886,6 +962,15 @@ slots.source__stu_id = Slot(uri=DATASET.stu_id, name="source__stu_id", curie=DAT
 slots.source__sth_id = Slot(uri=DATASET.sth_id, name="source__sth_id", curie=DATASET.curie('sth_id'),
                    model_uri=DATASET.source__sth_id, domain=None, range=Optional[str])
 
+slots.source__sampling_frequency = Slot(uri=DATASET.sampling_frequency, name="source__sampling_frequency", curie=DATASET.curie('sampling_frequency'),
+                   model_uri=DATASET.source__sampling_frequency, domain=None, range=Optional[float])
+
+slots.source__quality = Slot(uri=DATASET.quality, name="source__quality", curie=DATASET.curie('quality'),
+                   model_uri=DATASET.source__quality, domain=None, range=Optional[Union[dict, QualityChannel]])
+
+slots.source__additional_data = Slot(uri=DATASET.additional_data, name="source__additional_data", curie=DATASET.curie('additional_data'),
+                   model_uri=DATASET.source__additional_data, domain=None, range=Optional[str])
+
 slots.source__hardware_metadata = Slot(uri=DATASET.hardware_metadata, name="source__hardware_metadata", curie=DATASET.curie('hardware_metadata'),
                    model_uri=DATASET.source__hardware_metadata, domain=None, range=Union[dict, HardwareMetadata])
 
@@ -894,6 +979,12 @@ slots.source__recording_metadata = Slot(uri=DATASET.recording_metadata, name="so
 
 slots.source__recording_data = Slot(uri=DATASET.recording_data, name="source__recording_data", curie=DATASET.curie('recording_data'),
                    model_uri=DATASET.source__recording_data, domain=None, range=Union[dict, RecordingData])
+
+slots.qualityChannel__values = Slot(uri=DATASET.values, name="qualityChannel__values", curie=DATASET.curie('values'),
+                   model_uri=DATASET.qualityChannel__values, domain=None, range=Union[float, list[float]])
+
+slots.qualityChannel__sampling_frequency = Slot(uri=DATASET.sampling_frequency, name="qualityChannel__sampling_frequency", curie=DATASET.curie('sampling_frequency'),
+                   model_uri=DATASET.qualityChannel__sampling_frequency, domain=None, range=Optional[float])
 
 slots.recording__sources = Slot(uri=DATASET.sources, name="recording__sources", curie=DATASET.curie('sources'),
                    model_uri=DATASET.recording__sources, domain=None, range=Union[dict[Union[str, SourceName], Union[dict, Source]], list[Union[dict, Source]]])
@@ -994,8 +1085,23 @@ slots.computationStep__environment = Slot(uri=DATASET.environment, name="computa
 slots.computationStep__source_node = Slot(uri=DATASET.source_node, name="computationStep__source_node", curie=DATASET.curie('source_node'),
                    model_uri=DATASET.computationStep__source_node, domain=None, range=Optional[str])
 
+slots.provenance__source_format = Slot(uri=DATASET.source_format, name="provenance__source_format", curie=DATASET.curie('source_format'),
+                   model_uri=DATASET.provenance__source_format, domain=None, range=Optional[str])
+
+slots.provenance__source_format_version = Slot(uri=DATASET.source_format_version, name="provenance__source_format_version", curie=DATASET.curie('source_format_version'),
+                   model_uri=DATASET.provenance__source_format_version, domain=None, range=Optional[str])
+
+slots.provenance__reader = Slot(uri=DATASET.reader, name="provenance__reader", curie=DATASET.curie('reader'),
+                   model_uri=DATASET.provenance__reader, domain=None, range=Optional[str])
+
+slots.provenance__writer = Slot(uri=DATASET.writer, name="provenance__writer", curie=DATASET.curie('writer'),
+                   model_uri=DATASET.provenance__writer, domain=None, range=Optional[str])
+
 slots.datasetBundle__recording = Slot(uri=DATASET.recording, name="datasetBundle__recording", curie=DATASET.curie('recording'),
                    model_uri=DATASET.datasetBundle__recording, domain=None, range=Union[dict, Recording])
+
+slots.datasetBundle__provenance = Slot(uri=DATASET.provenance, name="datasetBundle__provenance", curie=DATASET.curie('provenance'),
+                   model_uri=DATASET.datasetBundle__provenance, domain=None, range=Optional[Union[dict, Provenance]])
 
 slots.datasetBundle__preprocessed_tables = Slot(uri=DATASET.preprocessed_tables, name="datasetBundle__preprocessed_tables", curie=DATASET.curie('preprocessed_tables'),
                    model_uri=DATASET.datasetBundle__preprocessed_tables, domain=None, range=Optional[Union[Union[dict, PreprocessedRecording], list[Union[dict, PreprocessedRecording]]]])

@@ -79,11 +79,20 @@ def test_rows_per_packet_rejects_inconsistent_packets():
         _recording([0, 0, 1, 1, 1, 2, 2, 3]).rows_per_packet()
 
 
-def test_rows_per_packet_rejects_empty_counter():
+def test_rows_per_packet_rejects_a_recording_without_rows():
     recording = _recording([0])
-    recording.recording_data.counter = []  # the generated class won't construct with empty required columns
+    recording.recording_data.counter = []
+    recording.recording_data.timestamp = []
     with pytest.raises(ValueError, match="empty counter"):
         recording.rows_per_packet()
+
+
+def test_a_source_without_counter_has_one_row_per_packet_and_no_gaps():
+    recording = _recording([0, 1, 2])
+    recording.recording_data.counter = []
+    assert recording.rows_per_packet() == 1
+    assert recording.sample_index().tolist() == [0, 1, 2]
+    assert not recording.filled_mask().any()
 
 
 # ── Recording: sampling frequency ────────────────────────────────────────────

@@ -117,6 +117,7 @@ class DatasetBundle(generated.DatasetBundle):
             recording=_as_model_recording(loaded.recording),
             computations=dict(loaded.computations),
             steps=list(loaded.steps),
+            provenance=loaded.provenance,
         )
         for table in loaded.preprocessed_tables:
             bundle = bundle.with_preprocessed(table)
@@ -129,7 +130,16 @@ class DatasetBundle(generated.DatasetBundle):
         TDMS is read-only: save results with `to_hdf5`. Needs the `tdms`
         extra. See ICOschema.storage.python.tdms for the accepted layouts.
         """
-        return cls(recording=Recording.from_tdms(path))
+        from icoschema._version import software_id
+        from icoschema.storage.python import tdms
+
+        recording, version = tdms.load(path)
+        return cls(
+            recording=_as_model_recording(recording),
+            provenance=generated.Provenance(
+                source_format="tdms", source_format_version=version, reader=software_id()
+            ),
+        )
 
     @classmethod
     def from_file(cls, path: str) -> DatasetBundle:
@@ -203,7 +213,9 @@ class DatasetBundle(generated.DatasetBundle):
                 "cannot replace the recording of a bundle with computation steps "
                 "(they were computed from the current recording) -- call without_steps() first"
             )
-        return DatasetBundle(recording=recording, computations=dict(self.computations))
+        return DatasetBundle(
+            recording=recording, computations=dict(self.computations), provenance=self.provenance
+        )
 
     def with_preprocessed(
         self, preprocessed: generated.PreprocessedRecording, source: str | None = None
@@ -362,6 +374,7 @@ class DatasetBundle(generated.DatasetBundle):
             "preprocessed_tables": list(self._tables()),
             "computations": dict(self.computations),
             "steps": list(self._steps()),
+            "provenance": self.provenance,
         }
         fields.update(changes)
         return DatasetBundle(**fields)

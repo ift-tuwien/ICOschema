@@ -119,6 +119,36 @@ class Recording(generated.Recording):
         """The sources, in insertion order."""
         return cast(list[Source], list(self.sources.values()))
 
+    def earliest_start(self) -> np.datetime64 | None:
+        """The earliest `start_time` of the sources (`datetime64[us]`), `None`
+        if none of them has one."""
+        starts = [start for start in (s.start_datetime() for s in self.source_list()) if start is not None]
+        return min(starts) if starts else None
+
+    def start_offsets(self) -> dict[str, float]:
+        """Each source's start in seconds after the earliest source's start
+        (`0.0` for the earliest, and for a source without a `start_time`).
+
+        Sources have independent clocks: this only places them against each
+        other by their wall-clock start times, it never changes a source's own
+        timestamps, so computations on a source are not affected by it.
+        """
+        earliest = self.earliest_start()
+        offsets: dict[str, float] = {}
+        for source in self.source_list():
+            start = source.start_datetime()
+            offsets[str(source.name)] = (
+                0.0 if start is None or earliest is None else float((start - earliest) / np.timedelta64(1, "us")) / 1e6
+            )
+        return offsets
+
+    def time_axis(self, source: str | None = None) -> np.ndarray:
+        """A source's sample times in seconds on the recording's common axis:
+        its own timestamps plus `start_offsets()[source]`. `source` may be
+        omitted for a single-source recording."""
+        chosen = self.only_source() if source is None else self.sources[source]
+        return np.asarray(chosen.timestamps, dtype=np.float64) / 1e6 + self.start_offsets()[str(chosen.name)]
+
     def only_source(self) -> Source:
         """The one source of a single-source recording. Raises `ValueError`
         naming the sources if there are several."""
@@ -183,6 +213,16 @@ class Recording(generated.Recording):
     def signal_loss_percentage(self) -> float:
         """`Source.signal_loss_percentage` of the only source."""
         return self.only_source().signal_loss_percentage
+
+    @property
+    def signal_loss_measured(self) -> bool:
+        """`Source.signal_loss_measured` of the only source."""
+        return self.only_source().signal_loss_measured
+
+    @property
+    def has_counter(self) -> bool:
+        """`Source.has_counter` of the only source."""
+        return self.only_source().has_counter
 
     def rows_per_packet(self) -> int:
         """`Source.rows_per_packet()` of the only source."""

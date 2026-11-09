@@ -213,9 +213,12 @@ classes:
       counter:
         range: integer
         multivalued: true
-        required: true
+        required: false
         description: >-
           Per-sample packet counter values, used to detect lost packets.
+          Absent for sources that have no packet counter (e.g. read from a
+          TDMS file): the rows are then a gap-free grid and packet loss is
+          reported by Source.quality instead.
       channel1:
         range: float
         multivalued: true
@@ -259,6 +262,24 @@ classes:
         description: >-
           Identifier of the STH (sensory tool holder) of this source's
           STU/STH combination.
+      sampling_frequency:
+        range: float
+        description: >-
+          Per-channel sampling frequency in Hz, if the source's own data says
+          so (a TDMS file's 1 / wf_increment). When set it is binding; without
+          it the frequency follows from HardwareMetadata's ADC settings.
+      quality:
+        range: QualityChannel
+        description: >-
+          The signal quality reported alongside this source's data, if any
+          (a TDMS file's signalQuality channel). Kept with the source it
+          belongs to, at its own sampling frequency.
+      additional_data:
+        range: string
+        description: >-
+          Opaque (JSON-encoded) data the reader found next to this source's
+          data and has no field for (e.g. the properties of a TDMS file, group
+          and channels). Stored and round-tripped as is, never parsed.
       hardware_metadata:
         range: HardwareMetadata
         required: true
@@ -272,6 +293,22 @@ classes:
       recording_data:
         range: RecordingData
         required: true
+
+  QualityChannel:
+    description: >-
+      A signal-quality series of one source: percentages, 100 meaning nothing
+      was lost. Sampled independently of the source's channels.
+    attributes:
+      values:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          Quality in percent per sample, 100 = no loss.
+      sampling_frequency:
+        range: float
+        description: >-
+          Sampling frequency of `values` in Hz, if known.
 
   Recording:
     description: >-
@@ -498,6 +535,30 @@ classes:
           Whether a step node exists is not checked -- the step it names may
           have failed or been skipped without being recorded.
 
+  Provenance:
+    description: >-
+      Where a DatasetBundle was read from and by what it was written.
+    attributes:
+      source_format:
+        range: string
+        description: >-
+          Format the data was originally read from ("tdms", "hdf5"); kept
+          when the bundle is saved to HDF5 and read back.
+      source_format_version:
+        range: string
+        description: >-
+          Version of that format ("legacy" for files that predate versioning).
+      reader:
+        range: string
+        description: >-
+          The software that read the data from that format, as
+          "<name> <version>".
+      writer:
+        range: string
+        description: >-
+          The software that wrote the HDF5 file the bundle was read from, as
+          "<name> <version>". Set on writing.
+
   DatasetBundle:
     description: >-
       A Recording together with its optional PreprocessedRecordings (at most
@@ -507,6 +568,11 @@ classes:
       recording:
         range: Recording
         required: true
+      provenance:
+        range: Provenance
+        description: >-
+          Where the bundle was read from and by what it was written; absent
+          for a bundle built in memory.
       preprocessed_tables:
         range: PreprocessedRecording
         multivalued: true
