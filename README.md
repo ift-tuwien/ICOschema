@@ -236,13 +236,17 @@ just test-rust   # Rust, see below
 
 ```rust
 let bundle = icoschema::DatasetBundle::from_hdf5("some_file.hdf5")?;
-let recording = &bundle.recording;
-println!("{:.3} % lost", recording.signal_loss_percentage());
-let grid = recording.sample_index()?;
+let source = bundle.recording.only_source()?;   // a recording has one or more sources
+println!("{:.3} % lost", source.signal_loss_percentage());
+let grid = source.sample_index()?;
+let offsets = bundle.recording.start_offsets()?; // sources placed by their start times
 ```
 
-It reads all file format versions (legacy, 1.0 to 1.2) and writes 1.0 to 1.2 with
-[`rust-hdf5`](https://crates.io/crates/rust-hdf5), a pure Rust HDF5 library, so it builds without libhdf5 or any other C
+It reads all file format versions (legacy, 1.0 to 1.4) and writes 1.0 to 1.4 (several sources, sources without a
+packet counter, `quality`, `additional_data`, provenance) like the Python package, and `DatasetBundle::from_file`
+tells HDF5 from TDMS by content. It does **not** read TDMS files: there is no TDMS reader in the Rust port (a
+TDMS file gives an error saying so; convert it to HDF5 with the Python package).
+Storage uses [`rust-hdf5`](https://crates.io/crates/rust-hdf5), a pure Rust HDF5 library, so it builds without libhdf5 or any other C
 code. The one thing `rust-hdf5` cannot do is read arrays of variable-length strings (`inputs`, `output_keys` of a step);
 `rust/src/storage/vlen.rs` does that itself.
 

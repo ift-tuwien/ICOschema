@@ -1,9 +1,12 @@
 //! Rust port of ICOschema: generated schema (`icoschema-gen`), a model layer with the
 //! convenience API (`model`) and the HDF5 storage adapter (`storage`).
 //!
+//! A recording holds one or more sources (one per STU/STH combination); `Source` has the data
+//! and the calculations on it.
+//!
 //! ```no_run
 //! let recording = icoschema::Recording::from_hdf5("some_file.hdf5")?;
-//! println!("{}", recording.signal_loss_percentage());
+//! println!("{}", recording.only_source()?.signal_loss_percentage());
 //! # Ok::<(), icoschema::Error>(())
 //! ```
 
@@ -13,7 +16,7 @@ pub mod model;
 pub mod schema_support;
 pub mod storage;
 
-pub use model::{DatasetBundle, PreprocessedRecording, Recording};
+pub use model::{DatasetBundle, PreprocessedRecording, Recording, Source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

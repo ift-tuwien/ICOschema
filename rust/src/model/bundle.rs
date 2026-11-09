@@ -1,68 +1,130 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 
 use icoschema_gen as g;
 
-use super::{PreprocessedRecording, Recording};
+use super::{PreprocessedRecording, Recording, Source};
 use crate::storage::write::{self, Parts};
 use crate::{invalid, storage, Result};
 
-/// A recording, its optional preprocessed table, every derived dataset and the producing steps.
+/// `source_node` for the preprocessed table of a single-source recording.
+pub const PREPROCESSED_NODE: &str = "preprocessed";
+/// `source_node` prefix for the preprocessed table of a named source.
+pub const PREPROCESSED_PREFIX: &str = "preprocessed:";
+
+const HDF5_SIGNATURE: [u8; 8] = [0x89, b'H', b'D', b'F', b'\r', b'\n', 0x1a, b'\n'];
+const TDMS_SIGNATURE: [u8; 4] = *b"TDSm";
+
+/// A recording, its optional preprocessed tables (at most one per source), every derived dataset
+/// and the producing steps.
 ///
 /// Like in the Python package the `with_*` / `without_*` methods return the changed bundle and
-/// check what they add: a preprocessed table must fit the recording, steps are numbered in order
+/// check what they add: a preprocessed table must fit its source, steps are numbered in order
 /// and only list computations that exist. `to_hdf5` checks again, so a bundle built by filling
 /// the public fields directly cannot write an inconsistent file either.
 #[derive(Debug, Clone)]
 pub struct DatasetBundle {
     pub recording: Recording,
-    pub preprocessed: Option<PreprocessedRecording>,
+    /// At most one per source, each with its `source` set, in source order.
+    pub preprocessed_tables: Vec<PreprocessedRecording>,
     pub computations: HashMap<String, g::DerivedDataset>,
     /// Ordered by `step_index`.
     pub steps: Vec<g::ComputationStep>,
+    /// Where the data was read from and by what the file was written; `None` for a bundle built
+    /// in memory.
+    pub provenance: Option<g::Provenance>,
 }
 
 impl DatasetBundle {
     pub fn new(recording: Recording) -> Self {
-        Self { recording, preprocessed: None, computations: HashMap::new(), steps: Vec::new() }
+        Self {
+            recording,
+            preprocessed_tables: Vec::new(),
+            computations: HashMap::new(),
+            steps: Vec::new(),
+            provenance: None,
+        }
     }
 
     pub fn from_hdf5(path: &str) -> Result<Self> {
         let loaded = storage::hdf5::load_dataset_bundle(path)?;
-        let mut bundle = Self::new(loaded.recording.into());
-        bundle.computations = loaded.computations.unwrap_or_default();
-        bundle.steps = loaded.steps.unwrap_or_default();
-        match loaded.preprocessed {
-            // A preprocessed table that does not fit the recording is primary data: never skipped.
-            Some(p) => bundle.with_preprocessed(p),
-            None => Ok(bundle),
+        let mut bundle = Self::new(Recording::new(loaded.sources.into_iter().map(Source::from).collect())?);
+        bundle.computations = loaded.computations;
+        bundle.steps = loaded.steps;
+        bundle.provenance = Some(loaded.provenance);
+        for table in loaded.preprocessed {
+            // A preprocessed table that does not fit its source is primary data: never skipped.
+            bundle = bundle.with_preprocessed(table, None)?;
         }
+        Ok(bundle)
+    }
+
+    /// Loads an HDF5 file; a TDMS file is recognised by its first bytes (not its name) and
+    /// refused: the Rust port has no TDMS reader.
+    pub fn from_file(path: &str) -> Result<Self> {
+        let mut head = [0u8; 8];
+        let read = std::fs::File::open(path)
+            .and_then(|mut f| f.read(&mut head))
+            .map_err(|e| crate::Error::Invalid(format!("{path}: {e}")))?;
+        if read >= 4 && head[..4] == TDMS_SIGNATURE {
+            return invalid(format!("{path:?} is a TDMS file, which the Rust port cannot read (use the Python package)"));
+        }
+        if head == HDF5_SIGNATURE {
+            return Self::from_hdf5(path);
+        }
+        invalid(format!("{path:?} is neither an HDF5 nor a TDMS file"))
     }
 
     /// Writes the bundle to a fresh HDF5 file (see `storage::write` for the layout).
     pub fn to_hdf5(&self, path: &str) -> Result<()> {
-        if let Some(p) = &self.preprocessed {
-            validate_preprocessed(&self.recording, p)?;
+        for table in &self.preprocessed_tables {
+            let name = table.source.as_deref().unwrap_or_default();
+            match self.recording.source(name) {
+                Some(source) => validate_preprocessed(source, table)?,
+                None => return invalid(format!("preprocessed table for unknown source {name:?}")),
+            }
         }
-        validate_steps(&self.steps, &self.computations)?;
+        validate_steps(&self.steps, &self.computations, Some(&self.recording))?;
         write::save(
             Parts {
-                recording: &self.recording,
-                preprocessed: self.preprocessed.as_deref(),
+                sources: self.recording.sources().iter().map(|s| &**s).collect(),
+                preprocessed: self
+                    .preprocessed_tables
+                    .iter()
+                    .map(|t| (t.source.as_deref().unwrap_or_default(), &**t))
+                    .collect(),
                 computations: &self.computations,
                 steps: &self.steps,
+                provenance: self.provenance.as_ref(),
             },
             path,
         )
     }
 
-    pub fn computation(&self, key: &str) -> Option<&g::DerivedDataset> {
-        self.computations.get(key)
+    // ── preprocessed ───────────────────────────────────────────────────────
+
+    /// The preprocessed table of the only source, `None` if it has none. Raises if the recording
+    /// has several sources: use `preprocessed_for`.
+    pub fn preprocessed(&self) -> Result<Option<&PreprocessedRecording>> {
+        let names = self.recording.source_names();
+        match names.as_slice() {
+            [only] => self.preprocessed_for(only),
+            _ => invalid(format!("recording has {} sources ({names:?}); use preprocessed_for(source)", names.len())),
+        }
+    }
+
+    /// The preprocessed table of `source`, `None` if it has none. Raises for an unknown source.
+    pub fn preprocessed_for(&self, source: &str) -> Result<Option<&PreprocessedRecording>> {
+        if self.recording.source(source).is_none() {
+            return invalid(format!("no such source: {source:?}"));
+        }
+        Ok(self.preprocessed_tables.iter().find(|t| t.source.as_deref() == Some(source)))
     }
 
     /// Replaces the recording. Refused while there is a preprocessed table or there are steps:
     /// they were built from the current recording and would silently go stale.
     pub fn with_recording(mut self, recording: Recording) -> Result<Self> {
-        if self.preprocessed.is_some() {
+        if !self.preprocessed_tables.is_empty() {
             return invalid(
                 "cannot replace the recording of a bundle with a preprocessed table \
                  (it was built from the current recording): call without_preprocessed() first",
@@ -78,18 +140,60 @@ impl DatasetBundle {
         Ok(self)
     }
 
-    /// Sets (adds or replaces) the preprocessed table; it must fit the recording.
-    pub fn with_preprocessed(mut self, preprocessed: g::PreprocessedRecording) -> Result<Self> {
-        let preprocessed = PreprocessedRecording::from(preprocessed);
-        validate_preprocessed(&self.recording, &preprocessed)?;
-        self.preprocessed = Some(preprocessed);
+    /// Sets (adds, or replaces that source's) preprocessed table. The source is `source`, else
+    /// `preprocessed.source`, else the recording's only source; naming two different ones, or
+    /// none for a recording with several, is an error. The table must fit its source.
+    pub fn with_preprocessed(mut self, preprocessed: g::PreprocessedRecording, source: Option<&str>) -> Result<Self> {
+        let mut table = preprocessed;
+        if let (Some(given), Some(own)) = (source, table.source.as_deref()) {
+            if given != own {
+                return invalid(format!("table is for source {own:?}, not {given:?}"));
+            }
+        }
+        let names = self.recording.source_names();
+        let name = match (source, table.source.as_deref()) {
+            (Some(name), _) | (None, Some(name)) => name.to_string(),
+            (None, None) => match names.as_slice() {
+                [only] => only.to_string(),
+                _ => {
+                    return invalid(format!(
+                        "recording has {} sources ({names:?}); say which one the preprocessed table is for",
+                        names.len()
+                    ))
+                }
+            },
+        };
+        let Some(target) = self.recording.source(&name) else { return invalid(format!("no such source: {name:?}")) };
+        table.source = Some(name.clone());
+        let table = PreprocessedRecording::from(table);
+        validate_preprocessed(target, &table)?;
+        self.preprocessed_tables.retain(|t| t.source.as_deref() != Some(name.as_str()));
+        self.preprocessed_tables.push(table);
+        let order: Vec<String> = self.recording.source_names().iter().map(|n| n.to_string()).collect();
+        self.preprocessed_tables
+            .sort_by_key(|t| order.iter().position(|n| Some(n.as_str()) == t.source.as_deref()));
         Ok(self)
     }
 
-    /// Drops the preprocessed table (steps and computations are kept).
-    pub fn without_preprocessed(mut self) -> Self {
-        self.preprocessed = None;
-        self
+    /// Drops the preprocessed table of `source`, or of every source if none is named (steps and
+    /// computations are kept). Raises if a named source is unknown or has no table.
+    pub fn without_preprocessed(mut self, source: Option<&str>) -> Result<Self> {
+        match source {
+            None => self.preprocessed_tables.clear(),
+            Some(name) => {
+                if self.preprocessed_for(name)?.is_none() {
+                    return invalid(format!("source {name:?} has no preprocessed table"));
+                }
+                self.preprocessed_tables.retain(|t| t.source.as_deref() != Some(name));
+            }
+        }
+        Ok(self)
+    }
+
+    // ── computations and steps ─────────────────────────────────────────────
+
+    pub fn computation(&self, key: &str) -> Option<&g::DerivedDataset> {
+        self.computations.get(key)
     }
 
     /// Adds or replaces one computation under `key`.
@@ -104,7 +208,7 @@ impl DatasetBundle {
     pub fn with_step(mut self, mut step: g::ComputationStep) -> Result<Self> {
         step.step_index = self.steps.len() as isize;
         self.steps.push(step);
-        match validate_steps(&self.steps, &self.computations) {
+        match validate_steps(&self.steps, &self.computations, Some(&self.recording)) {
             Ok(()) => Ok(self),
             Err(e) => {
                 self.steps.pop();
@@ -152,6 +256,77 @@ impl DatasetBundle {
             .collect()
     }
 
+    /// The name of the source that `node` ultimately comes from.
+    ///
+    /// `node` is anything a step can name in `source_node`: a source name, `"preprocessed"`
+    /// (single source only), `"preprocessed:<source>"` or the `node` of a recorded step, which is
+    /// followed back through its `source_node` (or its `inputs`, if they all share one source) to
+    /// its root. `None` for a step that cannot be traced to one source (e.g. inputs from several
+    /// sources). Raises for a name that is none of these, including a step that was not recorded.
+    pub fn source_of(&self, node: &str) -> Result<Option<String>> {
+        let sources = self.recording.source_names();
+        let steps: HashMap<&str, &g::ComputationStep> = self.steps.iter().map(|s| (s.node.as_str(), s)).collect();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut current: Option<String> = Some(node.to_string());
+        loop {
+            let Some(name) = current else {
+                return Ok(if let [only] = sources.as_slice() { Some(only.to_string()) } else { None });
+            };
+            if sources.contains(&name.as_str()) {
+                return Ok(Some(name));
+            }
+            if name == PREPROCESSED_NODE {
+                return match sources.as_slice() {
+                    [only] => Ok(Some(only.to_string())),
+                    _ => invalid(format!("{PREPROCESSED_NODE:?} is ambiguous with sources {sources:?}; name one")),
+                };
+            }
+            if let Some(source) = name.strip_prefix(PREPROCESSED_PREFIX) {
+                return if sources.contains(&source) {
+                    Ok(Some(source.to_string()))
+                } else {
+                    invalid(format!("{name:?} names unknown source {source:?}"))
+                };
+            }
+            let step = match steps.get(name.as_str()) {
+                Some(step) if !seen.contains(&name) => *step,
+                _ => return invalid(format!("{name:?} is not a source, a preprocessed table or a recorded step")),
+            };
+            seen.insert(name);
+            if let Some(origin) = &step.source_node {
+                current = Some(origin.clone());
+            } else if let Some(inputs) = step.inputs.as_ref().filter(|i| !i.is_empty()) {
+                let mut origins = HashSet::new();
+                for input in inputs {
+                    origins.insert(self.source_of(input)?);
+                }
+                return Ok(if origins.len() == 1 { origins.into_iter().next().unwrap() } else { None });
+            } else {
+                current = None;
+            }
+        }
+    }
+
+    /// The computations of the steps that trace back to `source` (see `source_of`), by key.
+    /// Raises for an unknown source.
+    pub fn computations_for_source(&self, source: &str) -> Result<HashMap<&str, &g::DerivedDataset>> {
+        if self.recording.source(source).is_none() {
+            return invalid(format!("no such source: {source:?}"));
+        }
+        let mut found = HashMap::new();
+        for step in &self.steps {
+            if !matches!(self.source_of(&step.node), Ok(Some(origin)) if origin == source) {
+                continue;
+            }
+            for key in step.output_keys.iter().flatten() {
+                if let Some(d) = self.computations.get(key) {
+                    found.insert(key.as_str(), d);
+                }
+            }
+        }
+        Ok(found)
+    }
+
     /// Computation keys no step lists in its `output_keys` (older files, or code that adds
     /// computations without recording a step).
     pub fn unmanaged_keys(&self) -> HashSet<&str> {
@@ -161,10 +336,10 @@ impl DatasetBundle {
     }
 }
 
-/// `preprocessed` must fit `recording`: one row per gap-free grid position, the same channels,
+/// `preprocessed` must fit `source`: one row per gap-free grid position, the same channels,
 /// columns of equal length and a positive finite sampling frequency.
-pub fn validate_preprocessed(recording: &Recording, preprocessed: &g::PreprocessedRecording) -> Result<()> {
-    let grid_length = *recording.sample_index()?.last().unwrap() as usize + 1;
+pub fn validate_preprocessed(source: &Source, preprocessed: &g::PreprocessedRecording) -> Result<()> {
+    let grid_length = *source.sample_index()?.last().unwrap() as usize + 1;
     let channels = |a: &[f64], b: &[f64], c: &[f64]| -> Vec<&'static str> {
         [("channel1", a), ("channel2", b), ("channel3", c)]
             .into_iter()
@@ -172,7 +347,7 @@ pub fn validate_preprocessed(recording: &Recording, preprocessed: &g::Preprocess
             .map(|(n, _)| n)
             .collect()
     };
-    let raw = channels(recording.channel1(), recording.channel2(), recording.channel3());
+    let raw = channels(source.channel1(), source.channel2(), source.channel3());
     let pre = channels(
         &preprocessed.channel1,
         preprocessed.channel2.as_deref().unwrap_or(&[]),
@@ -202,8 +377,16 @@ pub fn validate_preprocessed(recording: &Recording, preprocessed: &g::Preprocess
 }
 
 /// `steps` must be numbered 0, 1, 2, ... in order, with unique node names that are single HDF5
-/// path segments, and every `output_keys` entry must be in `computations`.
-pub fn validate_steps(steps: &[g::ComputationStep], computations: &HashMap<String, g::DerivedDataset>) -> Result<()> {
+/// path segments, and every `output_keys` entry must be in `computations`. Step names share one
+/// namespace with the reserved "preprocessed" names and, given `recording`, its source names; a
+/// `source_node` of the form `preprocessed:<source>` must name one of its sources. (Whether a
+/// `source_node` names a recorded step is never checked: that step may have failed.)
+pub fn validate_steps(
+    steps: &[g::ComputationStep],
+    computations: &HashMap<String, g::DerivedDataset>,
+    recording: Option<&Recording>,
+) -> Result<()> {
+    let source_names: Vec<&str> = recording.map(Recording::source_names).unwrap_or_default();
     let mut seen = HashSet::new();
     for (position, step) in steps.iter().enumerate() {
         let node = &step.node;
@@ -220,6 +403,16 @@ pub fn validate_steps(steps: &[g::ComputationStep], computations: &HashMap<Strin
             step.output_keys.iter().flatten().filter(|k| !computations.contains_key(*k)).collect();
         if !missing.is_empty() {
             return invalid(format!("step {node:?} lists output_keys missing from computations: {missing:?}"));
+        }
+        if node == PREPROCESSED_NODE || node.starts_with(PREPROCESSED_PREFIX) || source_names.contains(&node.as_str()) {
+            return invalid(format!("step name {node:?} is reserved: it names a source or a preprocessed table"));
+        }
+        if let (Some(_), Some(origin)) = (recording, step.source_node.as_deref()) {
+            if let Some(source) = origin.strip_prefix(PREPROCESSED_PREFIX) {
+                if !source_names.contains(&source) {
+                    return invalid(format!("step {node:?} reads {origin:?}, but there is no such source"));
+                }
+            }
         }
     }
     Ok(())

@@ -40,11 +40,17 @@ fixture_tests! {
     rejects_missing_start_time => "err_no_start_time.h5",
     rejects_four_channels => "err_four_channels.h5",
     rejects_unconverted_without_sensors => "err_unconverted_no_sensors.h5",
+    several_sources_with_steps_and_a_preprocessed_table => "multi_source.h5",
+    waveform_source_without_counter => "waveform_single.h5",
+    waveform_and_packet_sources_in_one_file => "waveform_multi.h5",
+    tdms_json_in_post_metadata_of_an_old_file => "legacy_tdms_json.h5",
+    rejects_duplicate_source_names => "err_duplicate_sources.h5",
+    rejects_a_listed_source_without_group => "err_missing_source_group.h5",
 }
 
 #[test]
 fn every_fixture_has_a_test() {
-    let tested = 16;
+    let tested = 22;
     let files = std::fs::read_dir(fixtures()).unwrap().filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "h5")).count();
     assert_eq!(files, tested);
 }

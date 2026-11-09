@@ -1,233 +1,134 @@
-use std::ops::Deref;
-
 use icoschema_gen as g;
 
+use super::Source;
 use crate::{invalid, storage, Result};
 
-/// The ADC clock in Hz and its default (prescaler, acquisition time, oversample rate) settings.
-pub const ADC_CLOCK_HZ: f64 = 38_400_000.0;
-pub const DEFAULT_ADC_SETTINGS: (isize, isize, isize) = (2, 8, 64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrequencySource {
-    Hardware,
-    Default,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChannelSummary {
-    pub sensor_id: Option<String>,
-    pub sensor_type: Option<String>,
-    pub unit: Option<String>,
-    pub sample_count: usize,
-    pub min: f64,
-    pub max: f64,
-    pub mean: f64,
-    pub std: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Summary {
-    pub start_time: Option<String>,
-    pub sample_count: usize,
-    pub signal_loss_percentage: f64,
-    /// `("channel1", ..)` in order, only channels that have data.
-    pub channels: Vec<(&'static str, ChannelSummary)>,
-}
-
-/// A complete recording: hardware/sensor metadata plus its sample data.
+/// A complete recording: one or more independent `Source`s (one per STU/STH combination), each
+/// with its own clock, packet counter, ADC settings (hence its own sampling frequency) and
+/// sensors. The sources keep their order (the generated `g::Recording` is an unordered map).
+///
+/// Like `icoschema/model/python/recording.py`; the per-source data and calculations live on
+/// `Source`. A recording with one source is the common case: `only_source()`.
 #[derive(Debug, Clone)]
-pub struct Recording(g::Recording);
-
-impl Deref for Recording {
-    type Target = g::Recording;
-    fn deref(&self) -> &g::Recording {
-        &self.0
-    }
-}
-
-impl From<g::Recording> for Recording {
-    fn from(inner: g::Recording) -> Self {
-        Self(inner)
-    }
-}
-
-/// Packets dropped between each pair of consecutive rows, from gaps in the 8-bit wrapping counter.
-fn lost_packets(counter: &[isize]) -> Vec<isize> {
-    counter
-        .windows(2)
-        .map(|w| {
-            let gap = w[1] - w[0] - 1;
-            match gap {
-                -1 | -256 => 0,
-                g if g < 0 => g + 256,
-                g => g,
-            }
-        })
-        .collect()
+pub struct Recording {
+    sources: Vec<Source>,
 }
 
 impl Recording {
+    /// A recording of `sources` (at least one) with unique names that are single HDF5 path
+    /// segments (non-empty, no `/`, not starting with `.`).
+    pub fn new(sources: Vec<Source>) -> Result<Self> {
+        if sources.is_empty() {
+            return invalid("a recording needs at least one source");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for source in &sources {
+            let name = source.name();
+            if name.is_empty() || name.contains('/') || name.starts_with('.') {
+                return invalid(format!("source name {name:?} must be non-empty, contain no '/' and not start with '.'"));
+            }
+            if !seen.insert(name) {
+                return invalid(format!("duplicate source name {name:?}"));
+            }
+        }
+        Ok(Self { sources })
+    }
+
+    /// A recording of one source.
+    pub fn single(source: impl Into<Source>) -> Result<Self> {
+        Self::new(vec![source.into()])
+    }
+
     pub fn from_hdf5(path: &str) -> Result<Self> {
-        storage::hdf5::load_recording(path).map(Self)
+        Self::new(storage::hdf5::load_sources(path)?.into_iter().map(Source::from).collect())
     }
 
-    /// Writes the recording alone (format version 1.0) to a fresh HDF5 file.
+    /// Writes the recording alone to a fresh HDF5 file (format 1.0 for one packet source, 1.3
+    /// for several, 1.4 if a source needs it).
     pub fn to_hdf5(&self, path: &str) -> Result<()> {
-        storage::write::save_recording(&self.0, path)
+        storage::write::save_sources(self.sources.iter().map(|s| &**s).collect(), path)
     }
 
-    pub fn into_inner(self) -> g::Recording {
-        self.0
+    /// The generated type (a map keyed by source name: the order is lost).
+    pub fn into_generated(self) -> g::Recording {
+        g::Recording { sources: self.sources.into_iter().map(|s| (s.name().to_string(), s.into_inner())).collect() }
     }
 
-    /// Integer microseconds since `recording_metadata.start_time`.
-    pub fn timestamps(&self) -> &[isize] {
-        &self.0.recording_data.timestamp
+    /// The sources, in order.
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
     }
 
-    /// The 8-bit wrapping packet counter.
-    pub fn counter(&self) -> &[isize] {
-        &self.0.recording_data.counter
+    pub fn source(&self, name: &str) -> Option<&Source> {
+        self.sources.iter().find(|s| s.name() == name)
     }
 
-    pub fn channel1(&self) -> &[f64] {
-        &self.0.recording_data.channel1
+    pub fn source_names(&self) -> Vec<&str> {
+        self.sources.iter().map(Source::name).collect()
     }
 
-    /// Empty if the recording has no second channel.
-    pub fn channel2(&self) -> &[f64] {
-        self.0.recording_data.channel2.as_deref().unwrap_or(&[])
-    }
-
-    /// Empty if the recording has no third channel.
-    pub fn channel3(&self) -> &[f64] {
-        self.0.recording_data.channel3.as_deref().unwrap_or(&[])
-    }
-
-    fn channels(&self) -> [(&'static str, &[f64]); 3] {
-        [("channel1", self.channel1()), ("channel2", self.channel2()), ("channel3", self.channel3())]
-    }
-
-    pub fn channel_count(&self) -> usize {
-        self.channels().iter().filter(|(_, v)| !v.is_empty()).count()
-    }
-
-    /// Percentage of packets lost, inferred from gaps in `counter`.
-    pub fn signal_loss_percentage(&self) -> f64 {
-        let counter = self.counter();
-        let lost: isize = lost_packets(counter).iter().sum();
-        let received = counter.windows(2).filter(|w| w[0] != w[1]).count() as isize + 1;
-        lost as f64 / (received + lost) as f64 * 100.0
-    }
-
-    /// How many rows one packet carries (the length of runs of equal counter values).
-    pub fn rows_per_packet(&self) -> Result<usize> {
-        let counter = self.counter();
-        if counter.is_empty() {
-            return invalid("cannot infer rows per packet from an empty counter");
+    /// The one source of a single-source recording. Raises naming the sources if there are
+    /// several.
+    pub fn only_source(&self) -> Result<&Source> {
+        match self.sources.as_slice() {
+            [only] => Ok(only),
+            many => invalid(format!(
+                "recording has {} sources ({:?}); pick one with source(name)",
+                many.len(),
+                self.source_names()
+            )),
         }
-        let mut runs = Vec::new();
-        let mut start = 0;
-        for i in 1..=counter.len() {
-            if i == counter.len() || counter[i] != counter[i - 1] {
-                runs.push(i - start);
-                start = i;
+    }
+
+    /// The earliest `start_time` of the sources (microseconds since the Unix epoch), `None` if
+    /// none of them has one.
+    pub fn earliest_start(&self) -> Result<Option<i64>> {
+        let mut earliest = None;
+        for source in &self.sources {
+            if let Some(start) = source.start_micros()? {
+                earliest = Some(earliest.map_or(start, |e: i64| e.min(start)));
             }
         }
-        // The first and last run may be partial; they only count if they are the only ones.
-        let interior = if runs.len() > 2 { &runs[1..runs.len() - 1] } else { &[][..] };
-        match interior {
-            [] => Ok(*runs.iter().max().unwrap()),
-            [first, rest @ ..] if rest.iter().all(|r| r == first) => Ok(*first),
-            _ => invalid("inconsistent rows per packet in counter"),
-        }
+        Ok(earliest)
     }
 
-    /// Each received row's position on the gap-free sample grid.
-    pub fn sample_index(&self) -> Result<Vec<i64>> {
-        let rows = self.rows_per_packet()? as i64;
-        let mut lost_rows = 0i64;
-        let mut out = Vec::with_capacity(self.counter().len());
-        out.push(0);
-        for (i, lost) in lost_packets(self.counter()).into_iter().enumerate() {
-            lost_rows += lost as i64 * rows;
-            out.push(i as i64 + 1 + lost_rows);
-        }
-        Ok(out)
-    }
-
-    /// `true` at grid positions no row was received for (lost packets).
-    pub fn filled_mask(&self) -> Result<Vec<bool>> {
-        let index = self.sample_index()?;
-        let mut mask = vec![true; *index.last().unwrap_or(&-1) as usize + 1];
-        for i in index {
-            mask[i as usize] = false;
-        }
-        Ok(mask)
-    }
-
-    /// The ADC's total sampling frequency in Hz and where it came from.
-    pub fn total_sampling_frequency(&self) -> Result<(f64, FrequencySource)> {
-        let hw = &self.0.hardware_metadata;
-        let (p, a, o, source) = match (hw.adc_prescaler, hw.adc_acquisition_time, hw.adc_oversample_rate) {
-            (None, None, None) => {
-                let (p, a, o) = DEFAULT_ADC_SETTINGS;
-                (p, a, o, FrequencySource::Default)
-            }
-            (Some(p), Some(a), Some(o)) => (p, a, o, FrequencySource::Hardware),
-            _ => return invalid("incomplete ADC settings: all of prescaler, acquisition time and oversample rate, or none"),
-        };
-        if p < 0 || a < 0 || o <= 0 {
-            return invalid(format!("invalid ADC settings: {:?}", (p, a, o)));
-        }
-        Ok((ADC_CLOCK_HZ / ((p + 1) * (a + 13) * o) as f64, source))
-    }
-
-    pub fn channel_sampling_frequency(&self) -> Result<(f64, FrequencySource)> {
-        if self.channel_count() == 0 {
-            return invalid("recording has no channels to split the sampling frequency across");
-        }
-        let (total, source) = self.total_sampling_frequency()?;
-        Ok((total / self.channel_count() as f64, source))
-    }
-
-    pub fn summary(&self) -> Summary {
-        let metadata = [
-            Some(&self.0.hardware_metadata.channel1_metadata),
-            self.0.hardware_metadata.channel2_metadata.as_ref(),
-            self.0.hardware_metadata.channel3_metadata.as_ref(),
-        ];
-        let channels = self
-            .channels()
-            .into_iter()
-            .zip(metadata)
-            .filter(|((_, values), _)| !values.is_empty())
-            .map(|((name, values), meta)| {
-                let n = values.len() as f64;
-                let mean = values.iter().sum::<f64>() / n;
-                let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
-                let sensor = meta.map(|m| &m.sensor);
-                (
-                    name,
-                    ChannelSummary {
-                        sensor_id: sensor.and_then(|s| s.sensor_id.clone()),
-                        sensor_type: sensor.and_then(|s| s.sensor_type.clone()),
-                        unit: sensor.and_then(|s| s.unit.clone()),
-                        sample_count: values.len(),
-                        min: values.iter().copied().fold(f64::INFINITY, f64::min),
-                        max: values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-                        mean,
-                        std: var.sqrt(),
-                    },
-                )
+    /// Each source's start in seconds after the earliest source's start (`0.0` for the earliest,
+    /// and for a source without a `start_time`), in source order.
+    ///
+    /// Sources have independent clocks: this only places them against each other by their
+    /// wall-clock start times, it never changes a source's own timestamps, so computations on a
+    /// source are not affected by it.
+    pub fn start_offsets(&self) -> Result<Vec<(&str, f64)>> {
+        let earliest = self.earliest_start()?;
+        self.sources
+            .iter()
+            .map(|source| {
+                let offset = match (source.start_micros()?, earliest) {
+                    (Some(start), Some(earliest)) => (start - earliest) as f64 / 1e6,
+                    _ => 0.0,
+                };
+                Ok((source.name(), offset))
             })
-            .collect();
-        Summary {
-            start_time: self.0.recording_metadata.start_time.clone(),
-            sample_count: self.counter().len(),
-            signal_loss_percentage: self.signal_loss_percentage(),
-            channels,
-        }
+            .collect()
+    }
+
+    /// A source's sample times in seconds on the recording's common axis: its own timestamps
+    /// plus its start offset. `source` may be `None` for a single-source recording.
+    pub fn time_axis(&self, source: Option<&str>) -> Result<Vec<f64>> {
+        let chosen = match source {
+            None => self.only_source()?,
+            Some(name) => self.source(name).ok_or_else(|| crate::Error::Invalid(format!("no such source: {name:?}")))?,
+        };
+        let offset = self.start_offsets()?.into_iter().find(|(name, _)| *name == chosen.name()).map_or(0.0, |(_, o)| o);
+        Ok(chosen.timestamps().iter().map(|t| *t as f64 / 1e6 + offset).collect())
+    }
+}
+
+/// Sorted by source name, since the generated type does not keep an order.
+impl From<g::Recording> for Recording {
+    fn from(inner: g::Recording) -> Self {
+        let mut sources: Vec<Source> = inner.sources.into_values().map(Source::from).collect();
+        sources.sort_by(|a, b| a.name().cmp(b.name()));
+        Self { sources }
     }
 }

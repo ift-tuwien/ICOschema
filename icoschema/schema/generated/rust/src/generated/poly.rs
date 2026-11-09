@@ -337,9 +337,9 @@ pub trait RecordingData   {
     // fn timestamp_mut(&mut self) -> &mut impl poly_containers::SeqRef<'a, isize>;
     // fn set_timestamp(&mut self, value: &Vec<isize>);
 
-    fn counter<'a>(&'a self) -> impl poly_containers::SeqRef<'a, isize>;
-    // fn counter_mut(&mut self) -> &mut impl poly_containers::SeqRef<'a, isize>;
-    // fn set_counter(&mut self, value: &Vec<isize>);
+    fn counter<'a>(&'a self) -> Option<impl poly_containers::SeqRef<'a, isize>>;
+    // fn counter_mut(&mut self) -> &mut Option<impl poly_containers::SeqRef<'a, isize>>;
+    // fn set_counter(&mut self, value: Option<&Vec<isize>>);
 
     fn channel1<'a>(&'a self) -> impl poly_containers::SeqRef<'a, f64>;
     // fn channel1_mut(&mut self) -> &mut impl poly_containers::SeqRef<'a, f64>;
@@ -360,8 +360,8 @@ impl RecordingData for crate::RecordingData {
         fn timestamp<'a>(&'a self) -> impl poly_containers::SeqRef<'a, isize> {
         return &self.timestamp;
     }
-        fn counter<'a>(&'a self) -> impl poly_containers::SeqRef<'a, isize> {
-        return &self.counter;
+        fn counter<'a>(&'a self) -> Option<impl poly_containers::SeqRef<'a, isize>> {
+        return self.counter.as_ref();
     }
         fn channel1<'a>(&'a self) -> impl poly_containers::SeqRef<'a, f64> {
         return &self.channel1;
@@ -375,7 +375,31 @@ impl RecordingData for crate::RecordingData {
 }
 
 
-pub trait Recording   {
+pub trait Source   {
+
+    fn name<'a>(&'a self) -> &'a str;
+    // fn name_mut(&mut self) -> &mut &'a str;
+    // fn set_name(&mut self, value: String);
+
+    fn stu_id<'a>(&'a self) -> Option<&'a str>;
+    // fn stu_id_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_stu_id(&mut self, value: Option<&'a str>);
+
+    fn sth_id<'a>(&'a self) -> Option<&'a str>;
+    // fn sth_id_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_sth_id(&mut self, value: Option<&'a str>);
+
+    fn sampling_frequency(&self) -> Option<f64>;
+    // fn sampling_frequency_mut(&mut self) -> &mut Option<f64>;
+    // fn set_sampling_frequency(&mut self, value: Option<f64>);
+
+    fn quality<'a>(&'a self) -> Option<&'a crate::QualityChannel>;
+    // fn quality_mut(&mut self) -> &mut Option<&'a crate::QualityChannel>;
+    // fn set_quality<E>(&mut self, value: Option<E>) where E: Into<QualityChannel>;
+
+    fn additional_data<'a>(&'a self) -> Option<&'a str>;
+    // fn additional_data_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_additional_data(&mut self, value: Option<&'a str>);
 
     fn hardware_metadata<'a>(&'a self) -> &'a crate::HardwareMetadata;
     // fn hardware_metadata_mut(&mut self) -> &mut &'a crate::HardwareMetadata;
@@ -392,7 +416,25 @@ pub trait Recording   {
 
 }
 
-impl Recording for crate::Recording {
+impl Source for crate::Source {
+        fn name<'a>(&'a self) -> &'a str {
+        return &self.name[..];
+    }
+        fn stu_id<'a>(&'a self) -> Option<&'a str> {
+        return self.stu_id.as_deref();
+    }
+        fn sth_id<'a>(&'a self) -> Option<&'a str> {
+        return self.sth_id.as_deref();
+    }
+        fn sampling_frequency(&self) -> Option<f64> {
+        return self.sampling_frequency;
+    }
+        fn quality<'a>(&'a self) -> Option<&'a crate::QualityChannel> {
+        return self.quality.as_ref();
+    }
+        fn additional_data<'a>(&'a self) -> Option<&'a str> {
+        return self.additional_data.as_deref();
+    }
         fn hardware_metadata<'a>(&'a self) -> &'a crate::HardwareMetadata {
         return &self.hardware_metadata;
     }
@@ -401,6 +443,45 @@ impl Recording for crate::Recording {
     }
         fn recording_data<'a>(&'a self) -> &'a crate::RecordingData {
         return &self.recording_data;
+    }
+}
+
+
+pub trait QualityChannel   {
+
+    fn values<'a>(&'a self) -> impl poly_containers::SeqRef<'a, f64>;
+    // fn values_mut(&mut self) -> &mut impl poly_containers::SeqRef<'a, f64>;
+    // fn set_values(&mut self, value: &Vec<f64>);
+
+    fn sampling_frequency(&self) -> Option<f64>;
+    // fn sampling_frequency_mut(&mut self) -> &mut Option<f64>;
+    // fn set_sampling_frequency(&mut self, value: Option<f64>);
+
+
+}
+
+impl QualityChannel for crate::QualityChannel {
+        fn values<'a>(&'a self) -> impl poly_containers::SeqRef<'a, f64> {
+        return &self.values;
+    }
+        fn sampling_frequency(&self) -> Option<f64> {
+        return self.sampling_frequency;
+    }
+}
+
+
+pub trait Recording   {
+
+    fn sources<'a>(&'a self) -> impl poly_containers::MapRef<'a, String,crate::Source>;
+    // fn sources_mut(&mut self) -> &mut impl poly_containers::MapRef<'a, String,crate::Source>;
+    // fn set_sources<E>(&mut self, value: &HashMap<String, E>) where E: Into<Source>;
+
+
+}
+
+impl Recording for crate::Recording {
+        fn sources<'a>(&'a self) -> impl poly_containers::MapRef<'a, String,crate::Source> {
+        return &self.sources;
     }
 }
 
@@ -439,6 +520,10 @@ pub trait PreprocessedRecording   {
     // fn producer_mut(&mut self) -> &mut &'a str;
     // fn set_producer(&mut self, value: String);
 
+    fn source<'a>(&'a self) -> Option<&'a str>;
+    // fn source_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_source(&mut self, value: Option<&'a str>);
+
 
 }
 
@@ -466,6 +551,9 @@ impl PreprocessedRecording for crate::PreprocessedRecording {
     }
         fn producer<'a>(&'a self) -> &'a str {
         return &self.producer[..];
+    }
+        fn source<'a>(&'a self) -> Option<&'a str> {
+        return self.source.as_deref();
     }
 }
 
@@ -596,6 +684,10 @@ pub trait ComputationStep   {
     // fn environment_mut(&mut self) -> &mut Option<&'a str>;
     // fn set_environment(&mut self, value: Option<&'a str>);
 
+    fn source_node<'a>(&'a self) -> Option<&'a str>;
+    // fn source_node_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_source_node(&mut self, value: Option<&'a str>);
+
 
 }
 
@@ -639,6 +731,46 @@ impl ComputationStep for crate::ComputationStep {
         fn environment<'a>(&'a self) -> Option<&'a str> {
         return self.environment.as_deref();
     }
+        fn source_node<'a>(&'a self) -> Option<&'a str> {
+        return self.source_node.as_deref();
+    }
+}
+
+
+pub trait Provenance   {
+
+    fn source_format<'a>(&'a self) -> Option<&'a str>;
+    // fn source_format_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_source_format(&mut self, value: Option<&'a str>);
+
+    fn source_format_version<'a>(&'a self) -> Option<&'a str>;
+    // fn source_format_version_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_source_format_version(&mut self, value: Option<&'a str>);
+
+    fn reader<'a>(&'a self) -> Option<&'a str>;
+    // fn reader_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_reader(&mut self, value: Option<&'a str>);
+
+    fn writer<'a>(&'a self) -> Option<&'a str>;
+    // fn writer_mut(&mut self) -> &mut Option<&'a str>;
+    // fn set_writer(&mut self, value: Option<&'a str>);
+
+
+}
+
+impl Provenance for crate::Provenance {
+        fn source_format<'a>(&'a self) -> Option<&'a str> {
+        return self.source_format.as_deref();
+    }
+        fn source_format_version<'a>(&'a self) -> Option<&'a str> {
+        return self.source_format_version.as_deref();
+    }
+        fn reader<'a>(&'a self) -> Option<&'a str> {
+        return self.reader.as_deref();
+    }
+        fn writer<'a>(&'a self) -> Option<&'a str> {
+        return self.writer.as_deref();
+    }
 }
 
 
@@ -648,9 +780,13 @@ pub trait DatasetBundle   {
     // fn recording_mut(&mut self) -> &mut &'a crate::Recording;
     // fn set_recording<E>(&mut self, value: E) where E: Into<Recording>;
 
-    fn preprocessed<'a>(&'a self) -> Option<&'a crate::PreprocessedRecording>;
-    // fn preprocessed_mut(&mut self) -> &mut Option<&'a crate::PreprocessedRecording>;
-    // fn set_preprocessed<E>(&mut self, value: Option<E>) where E: Into<PreprocessedRecording>;
+    fn provenance<'a>(&'a self) -> Option<&'a crate::Provenance>;
+    // fn provenance_mut(&mut self) -> &mut Option<&'a crate::Provenance>;
+    // fn set_provenance<E>(&mut self, value: Option<E>) where E: Into<Provenance>;
+
+    fn preprocessed_tables<'a>(&'a self) -> Option<impl poly_containers::SeqRef<'a, crate::PreprocessedRecording>>;
+    // fn preprocessed_tables_mut(&mut self) -> &mut Option<impl poly_containers::SeqRef<'a, crate::PreprocessedRecording>>;
+    // fn set_preprocessed_tables<E>(&mut self, value: Option<&Vec<E>>) where E: Into<PreprocessedRecording>;
 
     fn computations<'a>(&'a self) -> Option<impl poly_containers::MapRef<'a, String,crate::DerivedDataset>>;
     // fn computations_mut(&mut self) -> &mut Option<impl poly_containers::MapRef<'a, String,crate::DerivedDataset>>;
@@ -667,8 +803,11 @@ impl DatasetBundle for crate::DatasetBundle {
         fn recording<'a>(&'a self) -> &'a crate::Recording {
         return &self.recording;
     }
-        fn preprocessed<'a>(&'a self) -> Option<&'a crate::PreprocessedRecording> {
-        return self.preprocessed.as_ref();
+        fn provenance<'a>(&'a self) -> Option<&'a crate::Provenance> {
+        return self.provenance.as_ref();
+    }
+        fn preprocessed_tables<'a>(&'a self) -> Option<impl poly_containers::SeqRef<'a, crate::PreprocessedRecording>> {
+        return self.preprocessed_tables.as_ref();
     }
         fn computations<'a>(&'a self) -> Option<impl poly_containers::MapRef<'a, String,crate::DerivedDataset>> {
         return self.computations.as_ref();

@@ -1,10 +1,14 @@
 //! The public API: wrappers around the generated schema types that add storage and convenience
-//! methods (like `icoschema/model/python`). Each wrapper derefs to its generated type, so all
-//! schema fields stay reachable (`recording.hardware_metadata`, ...).
+//! methods (like `icoschema/model/python`). `Source` and `PreprocessedRecording` deref to their
+//! generated types, so all schema fields stay reachable (`source.hardware_metadata`, ...).
 mod bundle;
 mod preprocessed;
 mod recording;
+mod source;
 
-pub use bundle::DatasetBundle;
+pub use bundle::{validate_preprocessed, validate_steps, DatasetBundle, PREPROCESSED_NODE, PREPROCESSED_PREFIX};
 pub use preprocessed::PreprocessedRecording;
-pub use recording::{FrequencySource, Recording, Summary, ChannelSummary};
+pub use recording::Recording;
+pub use source::{
+    ChannelSummary, FrequencySource, Source, Summary, ADC_CLOCK_HZ, DEFAULT_ADC_SETTINGS, LEGACY_TDMS_KEY,
+};

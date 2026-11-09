@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use icoschema::schema as g;
-use icoschema::DatasetBundle;
+use icoschema::{DatasetBundle, Source};
 use serde_json::Value;
 
 pub fn fixtures() -> PathBuf {
@@ -98,11 +98,24 @@ fn outcome<T>(got: icoschema::Result<T>, want: &Value, check: impl FnOnce(T, &Va
     }
 }
 
-/// Everything a bundle holds, compared with the dump of Python's reading (`gen_fixtures.py`).
-pub fn check_bundle(name: &str, b: &DatasetBundle, want: &Value) {
-    let r = &b.recording;
+/// One source, compared with the dump of Python's reading (`gen_fixtures.py`).
+fn check_source(name: &str, r: &Source, want: &Value) {
     let hw = &r.hardware_metadata;
+    let name = format!("{name} [{}]", r.name());
 
+    assert_eq!(r.name(), want["name"].as_str().unwrap(), "{name} name");
+    assert_eq!(r.stu_id, opt_str(&want["stu_id"]), "{name} stu_id");
+    assert_eq!(r.sth_id, opt_str(&want["sth_id"]), "{name} sth_id");
+    assert_eq!(r.sampling_frequency, opt_f64(&want["sampling_frequency"]), "{name} sampling_frequency");
+    assert_eq!(r.additional_data, opt_str(&want["additional_data"]), "{name} additional_data");
+    match (&r.quality, want["quality"].is_null()) {
+        (None, true) => {}
+        (Some(q), false) => {
+            assert_floats(&format!("{name} quality"), &q.values, &want["quality"]["values"]);
+            assert_eq!(q.sampling_frequency, opt_f64(&want["quality"]["sampling_frequency"]), "{name} quality rate");
+        }
+        _ => panic!("{name}: presence of quality differs"),
+    }
     assert_eq!(r.recording_metadata.start_time, opt_str(&want["start_time"]), "{name} start_time");
     assert_eq!(r.recording_metadata.pre_metadata, opt_str(&want["pre_metadata"]), "{name} pre_metadata");
     assert_eq!(r.recording_metadata.post_metadata, opt_str(&want["post_metadata"]), "{name} post_metadata");
@@ -119,11 +132,13 @@ pub fn check_bundle(name: &str, b: &DatasetBundle, want: &Value) {
 
     assert_eq!(r.timestamps().iter().map(|v| *v as i64).collect::<Vec<_>>(), ints(&want["timestamps"]), "{name} timestamps");
     assert_eq!(r.counter().iter().map(|v| *v as i64).collect::<Vec<_>>(), ints(&want["counter"]), "{name} counter");
+    assert_eq!(r.has_counter(), want["has_counter"].as_bool().unwrap(), "{name} has_counter");
     assert_floats(&format!("{name} channel1"), r.channel1(), &want["channel1"]);
     assert_floats(&format!("{name} channel2"), r.channel2(), &want["channel2"]);
     assert_floats(&format!("{name} channel3"), r.channel3(), &want["channel3"]);
     assert_eq!(r.channel_count() as i64, want["channel_count"], "{name} channel_count");
     assert!(close(r.signal_loss_percentage(), want["signal_loss_percentage"].as_f64().unwrap()), "{name} loss");
+    assert_eq!(r.signal_loss_measured(), want["signal_loss_measured"].as_bool().unwrap(), "{name} loss measured");
 
     outcome(r.rows_per_packet(), &want["rows_per_packet"], |g, w| assert_eq!(g as i64, *w, "{name} rows/packet"));
     outcome(r.sample_index(), &want["sample_index"], |g, w| assert_eq!(g, ints(w), "{name} sample_index"));
@@ -143,6 +158,8 @@ pub fn check_bundle(name: &str, b: &DatasetBundle, want: &Value) {
     let ws = &want["summary"];
     assert_eq!(s.sample_count as i64, ws["sample_count"], "{name} summary count");
     assert_eq!(s.start_time, opt_str(&ws["start_time"]));
+    assert_eq!(s.signal_loss_measured, ws["signal_loss_measured"].as_bool().unwrap(), "{name} summary measured");
+    assert!(close(s.signal_loss_percentage, ws["signal_loss_percentage"].as_f64().unwrap()), "{name} summary loss");
     let wch = ws["channels"].as_object().unwrap();
     assert_eq!(s.channels.len(), wch.len(), "{name} summary channels");
     for (n, c) in &s.channels {
@@ -154,21 +171,46 @@ pub fn check_bundle(name: &str, b: &DatasetBundle, want: &Value) {
             assert!(close(g, w[k].as_f64().unwrap()), "{name} summary {n}.{k}: {g} != {}", w[k]);
         }
     }
+}
 
-    match (&b.preprocessed, want["preprocessed"].is_null()) {
-        (None, true) => {}
-        (Some(p), false) => {
-            let w = &want["preprocessed"];
-            assert_eq!(p.timestamps().iter().map(|v| *v as i64).collect::<Vec<_>>(), ints(&w["timestamp"]));
-            assert_floats("pre ch1", p.channel1_values(), &w["channel1"]);
-            assert_floats("pre ch2", p.channel2_values(), &w["channel2"]);
-            assert_floats("pre ch3", p.channel3_values(), &w["channel3"]);
-            assert!(close(p.channel_sampling_frequency, w["fs"].as_f64().unwrap()));
-            assert_eq!(p.fill_method, w["fill_method"].as_str().unwrap());
-            assert_eq!(p.producer, w["producer"].as_str().unwrap());
-            assert_eq!(format!("{}", p.sampling_frequency_source), w["source"].as_str().unwrap().trim_start_matches("SamplingFrequencySource.").to_lowercase());
+/// Everything a bundle holds, compared with the dump of Python's reading (`gen_fixtures.py`).
+pub fn check_bundle(name: &str, b: &DatasetBundle, want: &Value) {
+    let provenance = b.provenance.as_ref().unwrap_or_else(|| panic!("{name}: no provenance"));
+    assert_eq!(provenance.source_format, opt_str(&want["provenance"]["source_format"]), "{name} source_format");
+    assert_eq!(provenance.source_format_version, opt_str(&want["provenance"]["source_format_version"]), "{name} source_format_version");
+
+    let wsources = want["sources"].as_array().unwrap();
+    assert_eq!(b.recording.sources().len(), wsources.len(), "{name} source count");
+    for (source, w) in b.recording.sources().iter().zip(wsources) {
+        check_source(name, source, w);
+    }
+    let offsets = b.recording.start_offsets().unwrap();
+    let woffsets = want["start_offsets"].as_array().unwrap();
+    assert_eq!(offsets.len(), woffsets.len(), "{name} start offsets");
+    for ((n, o), w) in offsets.iter().zip(woffsets) {
+        assert_eq!(*n, w[0].as_str().unwrap(), "{name} offset source");
+        assert!(close(*o, w[1].as_f64().unwrap()), "{name} offset of {n}: {o} != {}", w[1]);
+    }
+    for (n, head) in want["time_axis_head"].as_object().unwrap() {
+        let axis = b.recording.time_axis(Some(n)).unwrap();
+        let want_head = floats(head);
+        for (got, want) in axis.iter().zip(&want_head) {
+            assert!(close(*got, *want), "{name} time axis of {n}: {got} != {want}");
         }
-        _ => panic!("{name}: preprocessed presence differs"),
+    }
+
+    let wpre = want["preprocessed"].as_array().unwrap();
+    assert_eq!(b.preprocessed_tables.len(), wpre.len(), "{name}: preprocessed table count");
+    for (p, w) in b.preprocessed_tables.iter().zip(wpre) {
+        assert_eq!(p.source.as_deref(), w["source"].as_str(), "{name} preprocessed source");
+        assert_eq!(p.timestamps().iter().map(|v| *v as i64).collect::<Vec<_>>(), ints(&w["timestamp"]));
+        assert_floats("pre ch1", p.channel1_values(), &w["channel1"]);
+        assert_floats("pre ch2", p.channel2_values(), &w["channel2"]);
+        assert_floats("pre ch3", p.channel3_values(), &w["channel3"]);
+        assert!(close(p.channel_sampling_frequency, w["fs"].as_f64().unwrap()));
+        assert_eq!(p.fill_method, w["fill_method"].as_str().unwrap());
+        assert_eq!(p.producer, w["producer"].as_str().unwrap());
+        assert_eq!(format!("{}", p.sampling_frequency_source), w["sampling_frequency_source"].as_str().unwrap().trim_start_matches("SamplingFrequencySource.").to_lowercase());
     }
 
     let wc = want["computations"].as_object().unwrap();
@@ -195,11 +237,20 @@ pub fn check_bundle(name: &str, b: &DatasetBundle, want: &Value) {
         assert_eq!(s.resolved_params, opt_str(&w["resolved_params"]));
         assert_eq!(s.inputs, strs(&w["inputs"]), "{} inputs", s.node);
         assert_eq!(s.output_keys, strs(&w["output_keys"]), "{} output_keys", s.node);
+        assert_eq!(s.source_node, opt_str(&w["source_node"]), "{} source_node", s.node);
         assert_eq!(s.error, opt_str(&w["error"]));
         assert_eq!(s.summary, opt_str(&w["summary"]));
         assert_eq!(s.started_at, opt_str(&w["started_at"]));
         assert_eq!(s.duration_s, opt_f64(&w["duration_s"]));
         assert_eq!(s.environment, opt_str(&w["environment"]));
         assert_eq!(s.status.as_ref().map(|v| v.to_string()), opt_str(&w["status"]).map(|v| v.trim_start_matches("ComputationStatus.").to_string()));
+        outcome(b.source_of(&s.node), &want["source_of"][&s.node], |got, w| {
+            assert_eq!(got.as_deref(), w.as_str(), "{name} source_of({})", s.node)
+        });
+    }
+    for (source, w) in want["computations_for_source"].as_object().unwrap() {
+        let mut got: Vec<&str> = b.computations_for_source(source).unwrap().into_keys().collect();
+        got.sort();
+        assert_eq!(got, strs(w).unwrap().iter().map(String::as_str).collect::<Vec<_>>(), "{name} computations of source {source}");
     }
 }

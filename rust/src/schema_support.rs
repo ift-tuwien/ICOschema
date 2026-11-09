@@ -25,7 +25,7 @@ pub struct ClassSupport {
     pub support: Support,
 }
 
-pub const NOT_IN_FILE_FORMAT: &str = "not representable in the HDF5 file format (format versions 1.0 to 1.2)";
+pub const NOT_IN_FILE_FORMAT: &str = "not representable in the HDF5 file format (format versions 1.0 to 1.4)";
 
 pub const CLASSES: &[ClassSupport] = &[
     ClassSupport { name: "RecordingMetadata", attributes: &["start_time", "pre_metadata", "post_metadata"], support: Support::Full },
@@ -64,7 +64,27 @@ pub const CLASSES: &[ClassSupport] = &[
         attributes: &["timestamp", "counter", "channel1", "channel2", "channel3"],
         support: Support::Full,
     },
-    ClassSupport { name: "Recording", attributes: &["hardware_metadata", "recording_metadata", "recording_data"], support: Support::Full },
+    ClassSupport {
+        name: "QualityChannel",
+        attributes: &["values", "sampling_frequency"],
+        support: Support::Full,
+    },
+    ClassSupport {
+        name: "Source",
+        attributes: &[
+            "name",
+            "stu_id",
+            "sth_id",
+            "sampling_frequency",
+            "quality",
+            "additional_data",
+            "hardware_metadata",
+            "recording_metadata",
+            "recording_data",
+        ],
+        support: Support::Full,
+    },
+    ClassSupport { name: "Recording", attributes: &["sources"], support: Support::Full },
     ClassSupport {
         name: "PreprocessedRecording",
         attributes: &[
@@ -76,6 +96,7 @@ pub const CLASSES: &[ClassSupport] = &[
             "sampling_frequency_source",
             "fill_method",
             "producer",
+            "source",
         ],
         support: Support::Full,
     },
@@ -100,12 +121,18 @@ pub const CLASSES: &[ClassSupport] = &[
             "started_at",
             "duration_s",
             "environment",
+            "source_node",
         ],
         support: Support::Full,
     },
     ClassSupport {
+        name: "Provenance",
+        attributes: &["source_format", "source_format_version", "reader", "writer"],
+        support: Support::Full,
+    },
+    ClassSupport {
         name: "DatasetBundle",
-        attributes: &["recording", "preprocessed", "computations", "steps"],
+        attributes: &["recording", "provenance", "preprocessed_tables", "computations", "steps"],
         support: Support::Full,
     },
 ];

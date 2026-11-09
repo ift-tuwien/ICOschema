@@ -1,6 +1,17 @@
 //! Reads the PyTables-style HDF5 layout of ICOschema (`icoschema_format_version` absent = legacy
-//! `acceleration` table, "1.0".."1.2" = versioned). Mirrors `icoschema/storage/python/hdf5.py`;
-//! reading only. Not ported yet: legacy `Sensor_Range`, writing.
+//! `acceleration` table, "1.0".."1.4" = versioned). Mirrors `icoschema/storage/python/hdf5.py`:
+//!
+//! - "1.0".."1.2": one source, its table at the root (1.1 adds a preprocessed table, 1.2 steps);
+//! - "1.3": several sources, one group per source under `/sources/` (the root attribute `sources`
+//!   lists their names in order), each holding the table, its `sensors` table and, if it has one,
+//!   its preprocessed table;
+//! - "1.4": a superset for sources that are not packet recordings (TDMS): the primary table may
+//!   have no `counter` column and the attributes `sampling_frequency` and `additional_data`, a
+//!   dataset `quality` sits next to it, and a single source's name is always stored. Either
+//!   layout, told apart by the `sources` attribute.
+//!
+//! The root attributes `source_format`, `source_format_version`, `reader` and `writer` (every
+//! version) are the bundle's provenance. Legacy `Sensor_Range` files are read too.
 
 use std::collections::HashMap;
 
@@ -12,7 +23,10 @@ use super::vlen;
 use crate::{invalid, Error, Result};
 
 const LEGACY_PRIMARY_TABLE: &str = "acceleration";
-const SUPPORTED: [&str; 3] = ["1.0", "1.1", "1.2"];
+const SUPPORTED: [&str; 5] = ["1.0", "1.1", "1.2", "1.3", "1.4"];
+pub(super) const DEFAULT_SOURCE_NAME: &str = "source1";
+pub(super) const SOURCES_GROUP: &str = "sources";
+pub(super) const QUALITY_DATASET: &str = "quality";
 
 // ── enums ───────────────────────────────────────────────────────────────────
 //
@@ -66,8 +80,12 @@ impl Attrs for H5File {
     fn attribute(&self, name: &str) -> Result<rust_hdf5::H5Attribute> { Ok(self.attr(name)?) }
 }
 
+fn has_attr<T: Attrs + ?Sized>(o: &T, name: &str) -> bool {
+    o.attr_names_vec().iter().any(|n| n == name)
+}
+
 fn opt_str(o: &impl Attrs, name: &str) -> Result<Option<String>> {
-    if !o.attr_names_vec().iter().any(|n| n == name) {
+    if !has_attr(o, name) {
         return Ok(None);
     }
     let attr = o.attribute(name)?;
@@ -84,11 +102,17 @@ fn opt_int(o: &impl Attrs, name: &str) -> Result<Option<isize>> {
         .transpose()
 }
 
+fn opt_float(o: &impl Attrs, name: &str) -> Result<Option<f64>> {
+    opt_str(o, name)?
+        .map(|v| v.trim().parse::<f64>().or_else(|_| invalid(format!("attribute {name:?} must be a number, got {v:?}"))))
+        .transpose()
+}
+
 fn req_str(o: &impl Attrs, name: &str) -> Result<String> {
     opt_str(o, name)?.ok_or_else(|| Error::Invalid(format!("missing attribute {name:?}")))
 }
 
-// ── Recording ───────────────────────────────────────────────────────────────
+// ── layout ──────────────────────────────────────────────────────────────────
 
 pub fn format_version(file: &H5File) -> Result<Option<String>> {
     let version = opt_str(file, "icoschema_format_version")?;
@@ -100,20 +124,78 @@ pub fn format_version(file: &H5File) -> Result<Option<String>> {
     Ok(version)
 }
 
-pub fn load_recording(path: &str) -> Result<g::Recording> {
-    let file = H5File::open(path)?;
-    recording_from(&file, super::budget(path)?)
+/// Whether the sources are stored one group each under `/sources/` (1.3, or 1.4 with the
+/// `sources` attribute) rather than as one table at the root.
+fn has_sources_layout(file: &H5File, version: Option<&str>) -> bool {
+    version == Some("1.3") || (version == Some("1.4") && has_attr(file, "sources"))
 }
 
-fn recording_from(file: &H5File, budget: u64) -> Result<g::Recording> {
-    let table_name = match format_version(file)? {
+/// A list-of-strings attribute (`inputs`, `output_keys`, `sources`). rust-hdf5 0.7 can only read
+/// the first element of a variable-length string array, so those go through the `vlen` shim.
+fn string_list(o: &(impl Attrs + ?Sized), path: &str, name: &str) -> Result<Option<Vec<String>>> {
+    if !has_attr(o, name) {
+        return Ok(None);
+    }
+    let attr = o.attribute(name)?;
+    match attr.datatype()? {
+        DatatypeMessage::VarLenString { .. } => Ok(Some(vlen::strings(path, &attr.read_raw()?)?)),
+        _ => Ok(Some(vec![attr.read_string()?])),
+    }
+}
+
+/// The source names of a 1.3/1.4 file, in the order of the `sources` attribute.
+fn source_names(file: &H5File, path: &str) -> Result<Vec<String>> {
+    let group = file
+        .root_group()
+        .group(SOURCES_GROUP)
+        .map_err(|_| Error::Invalid("a file with several sources needs a /sources/ group".into()))?;
+    let names = string_list(file, path, "sources")?
+        .ok_or_else(|| Error::Invalid("a file with several sources needs a `sources` attribute".into()))?;
+    if names.is_empty() {
+        return invalid("a file with sources must list at least one");
+    }
+    let mut seen = std::collections::HashSet::new();
+    if let Some(duplicate) = names.iter().find(|n| !seen.insert(n.as_str())) {
+        return invalid(format!("duplicate source name {duplicate:?} in the `sources` attribute"));
+    }
+    let present = group.group_names()?;
+    let missing: Vec<&String> = names.iter().filter(|n| !present.contains(n)).collect();
+    if !missing.is_empty() {
+        return invalid(format!("sources {missing:?} are listed but have no group under /sources/"));
+    }
+    Ok(names)
+}
+
+// ── Sources ─────────────────────────────────────────────────────────────────
+
+/// The sources of the file, in file order.
+pub fn load_sources(path: &str) -> Result<Vec<g::Source>> {
+    let file = H5File::open(path)?;
+    sources_from(&file, path, super::budget(path)?)
+}
+
+fn sources_from(file: &H5File, path: &str, budget: u64) -> Result<Vec<g::Source>> {
+    let version = format_version(file)?;
+    let table_name = match &version {
         None => LEGACY_PRIMARY_TABLE.to_string(),
         Some(_) => req_str(file, "primary_table")?,
     };
-    let ds = file.dataset(&table_name)?;
+    if !has_sources_layout(file, version.as_deref()) {
+        return Ok(vec![source_from(file, budget, "", &table_name, None)?]);
+    }
+    source_names(file, path)?
+        .iter()
+        .map(|name| source_from(file, budget, &format!("{SOURCES_GROUP}/{name}/"), &table_name, Some(name)))
+        .collect()
+}
+
+/// One source from the table `<prefix><table_name>` and its `sensors` table (`prefix` is empty at
+/// the root, `sources/<name>/` in a source group). `name` overrides the stored `source_name`.
+fn source_from(file: &H5File, budget: u64, prefix: &str, table_name: &str, name: Option<&str>) -> Result<g::Source> {
+    let ds = file.dataset(&format!("{prefix}{table_name}"))?;
     let table = Table::read(&ds, budget)?;
 
-    let sensors = match file.dataset("sensors") {
+    let sensors = match file.dataset(&format!("{prefix}sensors")) {
         Ok(s) => Some(Table::read(&s, budget)?),
         Err(_) => None,
     };
@@ -173,7 +255,12 @@ fn recording_from(file: &H5File, budget: u64) -> Result<g::Recording> {
     };
     let data = g::RecordingData {
         timestamp: table.i64_column("timestamp")?.into_iter().map(|v| v as isize).collect(),
-        counter: table.i64_column("counter")?.into_iter().map(|v| v as isize).collect(),
+        // A 1.4 source without a packet counter has no column.
+        counter: if table.has("counter") {
+            Some(table.i64_column("counter")?.into_iter().map(|v| v as isize).collect())
+        } else {
+            None
+        },
         channel1: columns(0)?.ok_or_else(|| Error::Invalid("recording has no channel columns".into()))?,
         channel2: columns(1)?,
         channel3: columns(2)?,
@@ -188,7 +275,16 @@ fn recording_from(file: &H5File, budget: u64) -> Result<g::Recording> {
         channel2_metadata: if channel_columns.len() > 1 { Some(channel(1)?) } else { None },
         channel3_metadata: if channel_columns.len() > 2 { Some(channel(2)?) } else { None },
     };
-    Ok(g::Recording {
+    Ok(g::Source {
+        name: match name {
+            Some(n) => n.to_string(),
+            None => opt_str(&ds, "source_name")?.unwrap_or_else(|| DEFAULT_SOURCE_NAME.to_string()),
+        },
+        stu_id: opt_str(&ds, "stu_id")?,
+        sth_id: opt_str(&ds, "sth_id")?,
+        sampling_frequency: opt_float(&ds, "sampling_frequency")?,
+        quality: quality_from(file, budget, prefix)?,
+        additional_data: opt_str(&ds, "additional_data")?,
         hardware_metadata: hardware,
         recording_metadata: g::RecordingMetadata {
             start_time: Some(req_str(&ds, "Start_Time")?),
@@ -197,6 +293,18 @@ fn recording_from(file: &H5File, budget: u64) -> Result<g::Recording> {
         },
         recording_data: data,
     })
+}
+
+/// The `quality` dataset next to a source's table (1.4), if there is one.
+fn quality_from(file: &H5File, budget: u64, prefix: &str) -> Result<Option<g::QualityChannel>> {
+    let Ok(ds) = file.dataset(&format!("{prefix}{QUALITY_DATASET}")) else { return Ok(None) };
+    super::check_size(&ds, budget)?;
+    let values = match ds.datatype()? {
+        DatatypeMessage::FloatingPoint { .. } => ds.read_numeric_as::<f64>()?,
+        DatatypeMessage::FixedPoint { .. } => ds.read_numeric_as::<i64>()?.into_iter().map(|v| v as f64).collect(),
+        _ => return invalid("the quality dataset is not numeric"),
+    };
+    Ok(Some(g::QualityChannel { values, sampling_frequency: opt_float(&ds, "sampling_frequency")? }))
 }
 
 /// `"± 100.0 g₀"` -> unit `g`, range -100..100 (nothing else about the sensor was recorded).
@@ -245,31 +353,40 @@ fn sensor_row(t: &Table, i: usize) -> Result<g::Sensor> {
     })
 }
 
-/// A list-of-strings attribute (`inputs`, `output_keys`). rust-hdf5 0.7 can only read the first
-/// element of a variable-length string array, so those go through the `vlen` shim.
-fn string_list(o: &(impl Attrs + ?Sized), path: &str, name: &str) -> Result<Option<Vec<String>>> {
-    if !o.attr_names_vec().iter().any(|n| n == name) {
-        return Ok(None);
-    }
-    let attr = o.attribute(name)?;
-    match attr.datatype()? {
-        DatatypeMessage::VarLenString { .. } => Ok(Some(vlen::strings(path, &attr.read_raw()?)?)),
-        _ => Ok(Some(vec![attr.read_string()?])),
-    }
-}
-
 // ── PreprocessedRecording, computations, steps ──────────────────────────────
 
-fn preprocessed_from(file: &H5File, budget: u64) -> Result<Option<g::PreprocessedRecording>> {
-    if matches!(format_version(file)?.as_deref(), None | Some("1.0")) {
-        return Ok(None);
+/// The preprocessed tables of the file (none for a file without any): the one at the root for a
+/// 1.1/1.2 file (and a single-source 1.4 file), one per source group that has one for a sources
+/// layout. Each gets its source's name.
+fn preprocessed_from(file: &H5File, sources: &[g::Source], version: Option<&str>, budget: u64) -> Result<Vec<g::PreprocessedRecording>> {
+    if matches!(version, None | Some("1.0")) {
+        return Ok(vec![]);
     }
-    let Some(name) = opt_str(file, "preprocessed_table")? else { return Ok(None) };
-    let ds = file.dataset(&name).map_err(|_| Error::Invalid(format!("preprocessed table {name:?} does not exist")))?;
+    let Some(table_name) = opt_str(file, "preprocessed_table")? else { return Ok(vec![]) };
+    if !has_sources_layout(file, version) {
+        return Ok(vec![read_preprocessed(file, "", &table_name, &sources[0].name, budget)?]);
+    }
+    let mut tables = Vec::new();
+    for source in sources {
+        let prefix = format!("{SOURCES_GROUP}/{}/", source.name);
+        if file.dataset(&format!("{prefix}{table_name}")).is_ok() {
+            tables.push(read_preprocessed(file, &prefix, &table_name, &source.name, budget)?);
+        }
+    }
+    if tables.is_empty() {
+        return invalid(format!("preprocessed table {table_name:?} does not exist"));
+    }
+    Ok(tables)
+}
+
+fn read_preprocessed(file: &H5File, prefix: &str, table_name: &str, source: &str, budget: u64) -> Result<g::PreprocessedRecording> {
+    let ds = file
+        .dataset(&format!("{prefix}{table_name}"))
+        .map_err(|_| Error::Invalid(format!("preprocessed table {table_name:?} does not exist")))?;
     let table = Table::read(&ds, budget)?;
-    let source = parse_enum(&req_str(&ds, "sampling_frequency_source")?, &SOURCES, source_name)?;
+    let frequency_source = parse_enum(&req_str(&ds, "sampling_frequency_source")?, &SOURCES, source_name)?;
     let channel = |c: &str| table.has(c).then(|| table.f64_column(c)).transpose();
-    Ok(Some(g::PreprocessedRecording {
+    Ok(g::PreprocessedRecording {
         timestamp: table.i64_column("timestamp")?.into_iter().map(|v| v as isize).collect(),
         channel1: table.f64_column("channel1")?,
         channel2: channel("channel2")?,
@@ -277,10 +394,11 @@ fn preprocessed_from(file: &H5File, budget: u64) -> Result<Option<g::Preprocesse
         channel_sampling_frequency: req_str(&ds, "channel_sampling_frequency")?
             .parse()
             .or_else(|_| invalid("channel_sampling_frequency is not a number"))?,
-        sampling_frequency_source: source,
+        sampling_frequency_source: frequency_source,
         fill_method: req_str(&ds, "fill_method")?,
         producer: req_str(&ds, "producer")?,
-    }))
+        source: Some(source.to_string()),
+    })
 }
 
 fn collect_computations(
@@ -329,8 +447,8 @@ fn collect_computations(
     Ok(())
 }
 
-fn steps_from(file: &H5File, path: &str) -> Result<Vec<g::ComputationStep>> {
-    if format_version(file)?.as_deref() != Some("1.2") {
+fn steps_from(file: &H5File, path: &str, version: Option<&str>) -> Result<Vec<g::ComputationStep>> {
+    if !matches!(version, Some("1.2" | "1.3" | "1.4")) {
         return Ok(vec![]);
     }
     let Ok(group) = file.root_group().group("steps") else { return Ok(vec![]) };
@@ -354,6 +472,7 @@ fn steps_from(file: &H5File, path: &str) -> Result<Vec<g::ComputationStep>> {
             started_at: opt_str(&step, "started_at")?,
             duration_s: opt_str(&step, "duration_s")?.and_then(|v| v.parse().ok()),
             environment: opt_str(&step, "environment")?,
+            source_node: opt_str(&step, "source_node")?,
         });
     }
     steps.sort_by(|a, b| (a.step_index, &a.node).cmp(&(b.step_index, &b.node)));
@@ -363,17 +482,40 @@ fn steps_from(file: &H5File, path: &str) -> Result<Vec<g::ComputationStep>> {
     Ok(steps)
 }
 
-pub fn load_dataset_bundle(path: &str) -> Result<g::DatasetBundle> {
+/// What a file holds, with the sources in file order (the generated `Recording` is an unordered map).
+pub struct Loaded {
+    pub sources: Vec<g::Source>,
+    pub preprocessed: Vec<g::PreprocessedRecording>,
+    pub computations: HashMap<String, g::DerivedDataset>,
+    pub steps: Vec<g::ComputationStep>,
+    pub provenance: g::Provenance,
+}
+
+pub fn load_dataset_bundle(path: &str) -> Result<Loaded> {
     let file = H5File::open(path)?;
     let budget = super::budget(path)?;
+    let version = format_version(&file)?;
+    let sources = sources_from(&file, path, budget)?;
     let mut computations = HashMap::new();
     if let Ok(group) = file.root_group().group("computations") {
         collect_computations(&file, budget, &group, "", &mut computations)?;
     }
-    Ok(g::DatasetBundle {
-        recording: recording_from(&file, budget)?,
-        preprocessed: preprocessed_from(&file, budget)?,
-        computations: Some(computations),
-        steps: Some(steps_from(&file, path)?),
+    Ok(Loaded {
+        preprocessed: preprocessed_from(&file, &sources, version.as_deref(), budget)?,
+        steps: steps_from(&file, path, version.as_deref())?,
+        provenance: provenance_from(&file, version.as_deref())?,
+        sources,
+        computations,
     })
+}
+
+/// What the file says about where its data came from; a file that says nothing is data read from
+/// HDF5 of its own format version.
+fn provenance_from(file: &H5File, version: Option<&str>) -> Result<g::Provenance> {
+    let (source_format, source_format_version, reader) = if has_attr(file, "source_format") {
+        (opt_str(file, "source_format")?, opt_str(file, "source_format_version")?, opt_str(file, "reader")?)
+    } else {
+        (Some("hdf5".to_string()), Some(version.unwrap_or("legacy").to_string()), Some(super::software_id()))
+    };
+    Ok(g::Provenance { source_format, source_format_version, reader, writer: opt_str(file, "writer")? })
 }

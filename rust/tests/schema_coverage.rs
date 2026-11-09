@@ -10,7 +10,8 @@ use serde_yml::Value;
 
 fn schema_text() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../icoschema/schema/linkml/dataset.yaml");
-    std::fs::read_to_string(path).unwrap()
+    // Checked out with CRLF line endings on Windows; the edits below assume LF.
+    std::fs::read_to_string(path).unwrap().replace("\r\n", "\n")
 }
 
 fn keys(v: Option<&Value>) -> Vec<String> {

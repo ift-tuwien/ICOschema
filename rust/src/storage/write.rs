@@ -1,7 +1,10 @@
 //! Writes the PyTables-style HDF5 layout of ICOschema, like `icoschema/storage/python/hdf5.py`:
 //! the lowest format version that can hold the data ("1.0" recording, "1.1" with a preprocessed
-//! table, "1.2" with steps), every dataset of more than one element chunked and compressed with
-//! gzip level 4 plus shuffle, computations under `/computations/` in their true N-D shape.
+//! table, "1.2" with steps, "1.3" with several sources, "1.4" if a source has no packet counter
+//! or has its own sampling frequency, quality or additional data), every dataset of more than one
+//! element chunked and compressed with gzip level 4 plus shuffle, computations under
+//! `/computations/` in their true N-D shape. Every file also gets the root attribute `writer`, and
+//! the provenance's `source_format`, `source_format_version` and `reader` if the bundle has one.
 //!
 //! Every generated struct is taken apart *without* `..`, so a field added to the LinkML schema
 //! breaks the build here until the writer decides what to do with it.
@@ -20,7 +23,7 @@ use rust_hdf5::format::messages::datatype::{CompoundMember, DatatypeMessage};
 use rust_hdf5::types::VarLenUnicode;
 use rust_hdf5::{H5Dataset, H5File, H5Group};
 
-use super::hdf5::{source_name, status_name};
+use super::hdf5::{source_name, status_name, DEFAULT_SOURCE_NAME, QUALITY_DATASET, SOURCES_GROUP};
 use crate::{invalid, Error, Result};
 
 const PRIMARY_TABLE: &str = "recording";
@@ -29,17 +32,20 @@ const GZIP_LEVEL: u32 = 4;
 /// Target chunk size; chunks hold about this many bytes before compression.
 const CHUNK_BYTES: usize = 64 * 1024;
 
-/// What goes into a file besides the primary recording.
+/// What goes into a file.
 pub struct Parts<'a> {
-    pub recording: &'a g::Recording,
-    pub preprocessed: Option<&'a g::PreprocessedRecording>,
+    /// In file order; at least one.
+    pub sources: Vec<&'a g::Source>,
+    /// Each with the name of the source it belongs to.
+    pub preprocessed: Vec<(&'a str, &'a g::PreprocessedRecording)>,
     pub computations: &'a HashMap<String, g::DerivedDataset>,
     pub steps: &'a [g::ComputationStep],
+    pub provenance: Option<&'a g::Provenance>,
 }
 
-pub fn save_recording(recording: &g::Recording, path: &str) -> Result<()> {
+pub fn save_sources(sources: Vec<&g::Source>, path: &str) -> Result<()> {
     let empty = HashMap::new();
-    save(Parts { recording, preprocessed: None, computations: &empty, steps: &[] }, path)
+    save(Parts { sources, preprocessed: vec![], computations: &empty, steps: &[], provenance: None }, path)
 }
 
 pub fn save(parts: Parts, path: &str) -> Result<()> {
@@ -56,24 +62,85 @@ pub fn save(parts: Parts, path: &str) -> Result<()> {
     result
 }
 
+/// Whether a source needs format 1.4: no packet counter, or a sampling frequency, quality or
+/// additional data of its own.
+fn uses_source_features(source: &g::Source) -> bool {
+    source.sampling_frequency.is_some()
+        || source.quality.is_some()
+        || source.additional_data.is_some()
+        || source.recording_data.counter.as_deref().is_none_or(<[isize]>::is_empty)
+}
+
 fn write_file(parts: &Parts, path: &str) -> Result<()> {
+    if parts.sources.is_empty() {
+        return invalid("a recording needs at least one source");
+    }
+    let mut seen = std::collections::HashSet::new();
+    for source in &parts.sources {
+        let name = &source.name;
+        if name.is_empty() || name.contains('/') || name.starts_with('.') {
+            return invalid(format!("source name {name:?} must be non-empty, contain no '/' and not start with '.'"));
+        }
+        if !seen.insert(name.as_str()) {
+            return invalid(format!("duplicate source name {name:?}"));
+        }
+    }
+
     let file = H5File::create(path)?;
     // Superblock 2 instead of the default 3: readable by every HDF5 since 1.8.
     file.set_libver_latest(false)?;
 
-    let version = if !parts.steps.is_empty() {
+    let multiple = parts.sources.len() > 1;
+    let features = parts.sources.iter().any(|s| uses_source_features(s));
+    let version = if features {
+        "1.4"
+    } else if multiple {
+        "1.3"
+    } else if !parts.steps.is_empty() {
         "1.2"
-    } else if parts.preprocessed.is_some() {
+    } else if !parts.preprocessed.is_empty() {
         "1.1"
     } else {
         "1.0"
     };
     file.set_attr_string("icoschema_format_version", version)?;
     file.set_attr_string("primary_table", PRIMARY_TABLE)?;
-    write_recording_table(&file, parts.recording)?;
-    if let Some(preprocessed) = parts.preprocessed {
+    file.set_attr_string("writer", &super::software_id())?;
+    if let Some(provenance) = parts.provenance {
+        let g::Provenance { source_format, source_format_version, reader, writer: _ } = provenance;
+        for (name, value) in
+            [("source_format", source_format), ("source_format_version", source_format_version), ("reader", reader)]
+        {
+            if let Some(value) = value {
+                file.set_attr_string(name, value)?;
+            }
+        }
+    }
+
+    let root = file.root_group();
+    if multiple {
+        let names: Vec<&str> = parts.sources.iter().map(|s| s.name.as_str()).collect();
+        file.set_attr_string_array("sources", &names)?;
+        let sources = file.create_group(SOURCES_GROUP)?;
+        for source in &parts.sources {
+            write_source_table(&sources.create_group(&source.name)?, source, false, features)?;
+        }
+    } else {
+        write_source_table(&root, parts.sources[0], true, features)?;
+    }
+
+    if !parts.preprocessed.is_empty() {
         file.set_attr_string("preprocessed_table", PREPROCESSED_TABLE)?;
-        write_preprocessed_table(&file, preprocessed)?;
+        for (name, table) in &parts.preprocessed {
+            if !seen.contains(name) {
+                return invalid(format!("preprocessed table for unknown source {name:?}"));
+            }
+            if multiple {
+                write_preprocessed_table(&file.root_group().group(SOURCES_GROUP)?.group(name)?, table)?;
+            } else {
+                write_preprocessed_table(&root, table)?;
+            }
+        }
     }
     if !parts.steps.is_empty() {
         write_steps(&file, parts.steps)?;
@@ -107,9 +174,9 @@ fn chunk_dims(shape: &[usize], element_size: usize) -> Vec<usize> {
     chunk
 }
 
-fn table(file: &H5File, name: &str, row_size: usize, members: Vec<CompoundMember>, rows: usize, raw: &[u8]) -> Result<H5Dataset> {
+fn table(parent: &H5Group, name: &str, row_size: usize, members: Vec<CompoundMember>, rows: usize, raw: &[u8]) -> Result<H5Dataset> {
     debug_assert_eq!(raw.len(), rows * row_size);
-    let mut builder = file
+    let mut builder = parent
         .new_dataset::<u8>()
         .datatype(DatatypeMessage::Compound { size: row_size as u32, members })
         .shape(&[rows]);
@@ -166,8 +233,22 @@ fn channel_members(count: usize, first_offset: usize) -> Vec<CompoundMember> {
     (0..count).map(|i| member(&format!("channel{}", i + 1), first_offset + 4 * i, DatatypeMessage::f32_type())).collect()
 }
 
-fn write_recording_table(file: &H5File, recording: &g::Recording) -> Result<()> {
-    let g::RecordingData { timestamp, counter, channel1, channel2, channel3 } = &recording.recording_data;
+/// A source's table, its `sensors` table and, with 1.4 features, its `quality` dataset, into
+/// `parent` (the root of the file or a source group). A single source's name is stored only if
+/// it is not the default one, or always in 1.4 (`always_name`).
+fn write_source_table(parent: &H5Group, source: &g::Source, store_name: bool, always_name: bool) -> Result<()> {
+    let g::Source {
+        name,
+        stu_id,
+        sth_id,
+        sampling_frequency,
+        quality,
+        additional_data,
+        hardware_metadata,
+        recording_metadata,
+        recording_data,
+    } = source;
+    let g::RecordingData { timestamp, counter, channel1, channel2, channel3 } = recording_data;
     let g::HardwareMetadata {
         revision,
         adc_reference_voltage,
@@ -177,8 +258,8 @@ fn write_recording_table(file: &H5File, recording: &g::Recording) -> Result<()> 
         channel1_metadata,
         channel2_metadata,
         channel3_metadata,
-    } = &recording.hardware_metadata;
-    let g::RecordingMetadata { start_time, pre_metadata, post_metadata } = &recording.recording_metadata;
+    } = hardware_metadata;
+    let g::RecordingMetadata { start_time, pre_metadata, post_metadata } = recording_metadata;
     if revision.is_some() {
         return invalid("hardware_metadata.revision is not stored by the file format");
     }
@@ -186,8 +267,9 @@ fn write_recording_table(file: &H5File, recording: &g::Recording) -> Result<()> 
     if rows == 0 {
         return invalid("a recording needs at least one sample");
     }
+    let counter = counter.as_deref().filter(|c| !c.is_empty());
     let channels = present_channels([Some(channel1), channel2.as_deref(), channel3.as_deref()])?;
-    if counter.len() != rows || channels.iter().any(|c| c.len() != rows) {
+    if counter.is_some_and(|c| c.len() != rows) || channels.iter().any(|c| c.len() != rows) {
         return invalid("timestamp, counter and channel columns must have the same length");
     }
 
@@ -212,39 +294,66 @@ fn write_recording_table(file: &H5File, recording: &g::Recording) -> Result<()> 
         sensor_rows.clear();
     }
 
-    // counter u1, timestamp u8, channelN f4: 9 + 4 * channels bytes per row.
-    let row_size = 9 + 4 * channels.len();
+    // [counter u1,] timestamp u8, channelN f4 per row.
+    let counter_size = usize::from(counter.is_some());
+    let row_size = counter_size + 8 + 4 * channels.len();
     let mut raw = Vec::with_capacity(rows * row_size);
     for row in 0..rows {
-        raw.push(u8_value("counter", counter[row])?);
+        if let Some(counter) = counter {
+            raw.push(u8_value("counter", counter[row])?);
+        }
         raw.extend_from_slice(&u64_value("timestamp", timestamp[row])?.to_le_bytes());
         for channel in &channels {
             raw.extend_from_slice(&(channel[row] as f32).to_le_bytes());
         }
     }
-    let mut members = vec![
-        member("counter", 0, DatatypeMessage::u8_type()),
-        member("timestamp", 1, DatatypeMessage::u64_type()),
-    ];
-    members.extend(channel_members(channels.len(), 9));
-    let dataset = table(file, PRIMARY_TABLE, row_size, members, rows, &raw)?;
+    let mut members = Vec::new();
+    if counter.is_some() {
+        members.push(member("counter", 0, DatatypeMessage::u8_type()));
+    }
+    members.push(member("timestamp", counter_size, DatatypeMessage::u64_type()));
+    members.extend(channel_members(channels.len(), counter_size + 8));
+    let dataset = table(parent, PRIMARY_TABLE, row_size, members, rows, &raw)?;
 
     string_attr(&dataset, "Start_Time", start_time.as_deref().unwrap_or(""))?;
     string_attr(&dataset, "adc_reference_voltage", adc_reference_voltage.as_deref().unwrap_or(""))?;
     string_attr(&dataset, "conversion", if converted { "true" } else { "false" })?;
     optional_string_attr(&dataset, "pre_metadata", pre_metadata)?;
     optional_string_attr(&dataset, "post_metadata", post_metadata)?;
-    for (name, value) in [
+    optional_string_attr(&dataset, "stu_id", stu_id)?;
+    optional_string_attr(&dataset, "sth_id", sth_id)?;
+    if store_name && (always_name || name != DEFAULT_SOURCE_NAME) {
+        string_attr(&dataset, "source_name", name)?;
+    }
+    if let Some(frequency) = sampling_frequency {
+        float_attr(&dataset, "sampling_frequency", *frequency)?;
+    }
+    optional_string_attr(&dataset, "additional_data", additional_data)?;
+    for (attr, value) in [
         ("adc_prescaler", *adc_prescaler),
         ("adc_acquisition_time", *adc_acquisition_time),
         ("adc_oversample_rate", *adc_oversample_rate),
     ] {
         if let Some(value) = value {
-            int_attr(&dataset, name, value as i64)?;
+            int_attr(&dataset, attr, value as i64)?;
+        }
+    }
+    if let Some(g::QualityChannel { values, sampling_frequency }) = quality {
+        if !values.is_empty() {
+            let data: Vec<f32> = values.iter().map(|v| *v as f32).collect();
+            let mut builder = parent.new_dataset::<f32>().shape(&[data.len()]);
+            if data.len() > 1 {
+                builder = builder.chunk(&chunk_dims(&[data.len()], 4)).shuffle_deflate(GZIP_LEVEL);
+            }
+            let quality_ds = builder.create(QUALITY_DATASET)?;
+            quality_ds.write_raw(&data)?;
+            if let Some(frequency) = sampling_frequency {
+                float_attr(&quality_ds, "sampling_frequency", *frequency)?;
+            }
         }
     }
     if !sensor_rows.is_empty() {
-        write_sensors(file, &sensor_rows)?;
+        write_sensors(parent, &sensor_rows)?;
     }
     Ok(())
 }
@@ -284,7 +393,7 @@ fn is_unspecified(sensor: &g::Sensor) -> bool {
 }
 
 /// Row layout of the `sensors` table (434 bytes), field order as numpy sorts them in Python.
-fn write_sensors(file: &H5File, rows: &[(&g::Sensor, f64, f64)]) -> Result<()> {
+fn write_sensors(parent: &H5Group, rows: &[(&g::Sensor, f64, f64)]) -> Result<()> {
     let f4 = DatatypeMessage::f32_type;
     let members = vec![
         member("dimension", 0, fixed_string(100)),
@@ -323,11 +432,11 @@ fn write_sensors(file: &H5File, rows: &[(&g::Sensor, f64, f64)]) -> Result<()> {
         raw.extend(float(volt_max.unwrap_or(0.0)));
         raw.extend(float(volt_min.unwrap_or(0.0)));
     }
-    table(file, "sensors", 434, members, rows.len(), &raw)?;
+    table(parent, "sensors", 434, members, rows.len(), &raw)?;
     Ok(())
 }
 
-fn write_preprocessed_table(file: &H5File, p: &g::PreprocessedRecording) -> Result<()> {
+fn write_preprocessed_table(parent: &H5Group, p: &g::PreprocessedRecording) -> Result<()> {
     let g::PreprocessedRecording {
         timestamp,
         channel1,
@@ -337,6 +446,7 @@ fn write_preprocessed_table(file: &H5File, p: &g::PreprocessedRecording) -> Resu
         sampling_frequency_source,
         fill_method,
         producer,
+        source: _, // names the group it is written into
     } = p;
     let channels = present_channels([Some(channel1), channel2.as_deref(), channel3.as_deref()])?;
     let rows = timestamp.len();
@@ -353,7 +463,7 @@ fn write_preprocessed_table(file: &H5File, p: &g::PreprocessedRecording) -> Resu
     }
     let mut members = vec![member("timestamp", 0, DatatypeMessage::u64_type())];
     members.extend(channel_members(channels.len(), 8));
-    let dataset = table(file, PREPROCESSED_TABLE, row_size, members, rows, &raw)?;
+    let dataset = table(parent, PREPROCESSED_TABLE, row_size, members, rows, &raw)?;
     float_attr(&dataset, "channel_sampling_frequency", *channel_sampling_frequency)?;
     string_attr(&dataset, "sampling_frequency_source", source_name(sampling_frequency_source))?;
     string_attr(&dataset, "fill_method", fill_method)?;
@@ -380,6 +490,7 @@ fn write_steps(file: &H5File, steps: &[g::ComputationStep]) -> Result<()> {
             started_at,
             duration_s,
             environment,
+            source_node,
         } = step;
         let node = group.create_group(name)?;
         node.set_attr_numeric("step_index", &(*step_index as i64))?;
@@ -393,6 +504,7 @@ fn write_steps(file: &H5File, steps: &[g::ComputationStep]) -> Result<()> {
             ("summary", summary.as_deref()),
             ("started_at", started_at.as_deref()),
             ("environment", environment.as_deref()),
+            ("source_node", source_node.as_deref()),
         ] {
             if let Some(value) = value {
                 node.set_attr_string(name, value)?;

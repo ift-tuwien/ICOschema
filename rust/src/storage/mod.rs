@@ -23,3 +23,8 @@ pub(crate) fn check_size(dataset: &H5Dataset, budget: u64) -> Result<()> {
         _ => invalid("dataset is larger than the file could possibly hold (corrupt file?)"),
     }
 }
+
+/// The software identity written into a file's provenance.
+pub(crate) fn software_id() -> String {
+    format!("icoschema-rust {}", env!("CARGO_PKG_VERSION"))
+}

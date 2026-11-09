@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use common::{check_bundle, expected, fixtures, load};
 use icoschema::schema as g;
-use icoschema::{DatasetBundle, Recording};
+use icoschema::{DatasetBundle, Recording, Source};
 
 /// A path no other test (they run in parallel) uses.
 fn temp(name: &str) -> PathBuf {
@@ -21,6 +21,14 @@ fn temp(name: &str) -> PathBuf {
 
 fn path(p: &std::path::Path) -> &str {
     p.to_str().unwrap()
+}
+
+fn only(recording: &Recording) -> &Source {
+    recording.only_source().unwrap()
+}
+
+fn one(source: g::Source) -> Recording {
+    Recording::single(source).unwrap()
 }
 
 // ── parity with the Python writer ───────────────────────────────────────────
@@ -42,7 +50,7 @@ fn rewriting_every_fixture_reads_back_like_python_rewrites_it() {
         check_bundle(&format!("{name} (rewritten)"), &again, want);
         checked += 1;
     }
-    assert!(checked >= 10, "only {checked} fixtures rewritten");
+    assert!(checked >= 15, "only {checked} fixtures rewritten");
 }
 
 #[test]
@@ -51,8 +59,8 @@ fn recording_alone_is_written_as_format_1_0() {
     let target = temp("alone.h5");
     recording.to_hdf5(path(&target)).unwrap();
     let bundle = DatasetBundle::from_hdf5(path(&target)).unwrap();
-    assert!(bundle.preprocessed.is_none() && bundle.steps.is_empty() && bundle.computations.is_empty());
-    assert_eq!(bundle.recording.counter(), recording.counter());
+    assert!(bundle.preprocessed_tables.is_empty() && bundle.steps.is_empty() && bundle.computations.is_empty());
+    assert_eq!(only(&bundle.recording).counter(), only(&recording).counter());
     // "1.0": the version attribute and nothing newer, not even the empty groups
     let file = rust_hdf5::H5File::open(&target).unwrap();
     assert_eq!(file.attr("icoschema_format_version").unwrap().read_string().unwrap(), "1.0");
@@ -71,7 +79,7 @@ fn format_version_follows_the_content() {
     let names: Vec<String> = full.steps.iter().map(|s| s.node.clone()).collect();
     let without_steps = full.clone().without_steps(names.iter().map(String::as_str)).unwrap();
     assert_eq!(version(&without_steps, "v11.h5"), "1.1");
-    assert_eq!(version(&without_steps.without_preprocessed(), "v10.h5"), "1.0");
+    assert_eq!(version(&without_steps.without_preprocessed(None).unwrap(), "v10.h5"), "1.0");
 }
 
 // ── building bundles from scratch ───────────────────────────────────────────
@@ -99,8 +107,18 @@ fn no_conversion() -> g::CompensationOrSubtype {
 }
 
 fn recording(channels: usize, rows: usize) -> Recording {
+    one(source("source1", channels, rows))
+}
+
+fn source(name: &str, channels: usize, rows: usize) -> g::Source {
     let column = |c: usize| (0..rows).map(|i| (i * (c + 1)) as f64 * 0.5).collect::<Vec<_>>();
-    g::Recording {
+    g::Source {
+        name: name.into(),
+        stu_id: None,
+        sth_id: None,
+        sampling_frequency: None,
+        quality: None,
+        additional_data: None,
         hardware_metadata: g::HardwareMetadata {
             revision: None,
             adc_reference_voltage: Some("3.3".into()),
@@ -118,13 +136,12 @@ fn recording(channels: usize, rows: usize) -> Recording {
         },
         recording_data: g::RecordingData {
             timestamp: (0..rows).map(|i| i as isize * 100).collect(),
-            counter: (0..rows).map(|i| (i % 256) as isize).collect(),
+            counter: Some((0..rows).map(|i| (i % 256) as isize).collect()),
             channel1: column(0),
             channel2: (channels > 1).then(|| column(1)),
             channel3: (channels > 2).then(|| column(2)),
         },
     }
-    .into()
 }
 
 fn derived(key: &str, shape: &[isize], dtype: &str, values: Vec<f64>) -> g::DerivedDataset {
@@ -156,6 +173,7 @@ fn step(node: &str, outputs: &[&str]) -> g::ComputationStep {
         started_at: None,
         duration_s: Some(0.5),
         environment: None,
+        source_node: None,
     }
 }
 
@@ -175,9 +193,9 @@ fn a_bundle_built_in_rust_survives_a_round_trip() {
     bundle.to_hdf5(path(&target)).unwrap();
 
     let back = DatasetBundle::from_hdf5(path(&target)).unwrap();
-    assert_eq!(back.recording.counter(), bundle.recording.counter());
-    assert_eq!(back.recording.timestamps(), bundle.recording.timestamps());
-    for (a, b) in back.recording.channel3().iter().zip(bundle.recording.channel3()) {
+    assert_eq!(only(&back.recording).counter(), only(&bundle.recording).counter());
+    assert_eq!(only(&back.recording).timestamps(), only(&bundle.recording).timestamps());
+    for (a, b) in only(&back.recording).channel3().iter().zip(only(&bundle.recording).channel3()) {
         assert_eq!(*a as f32, *b as f32);
     }
     assert_eq!(back.computations.len(), 5);
@@ -199,14 +217,14 @@ fn a_bundle_built_in_rust_survives_a_round_trip() {
 #[test]
 fn linear_conversion_and_tiny_recordings_round_trip() {
     for rows in [1, 2] {
-        let mut rec = recording(1, rows).into_inner();
+        let mut rec = source("source1", 1, rows);
         rec.hardware_metadata.channel1_metadata.compensations =
             vec![g::CompensationOrSubtype::LinearConversion(g::LinearConversion { order: 0, gain: 2.5, offset: -1.0 })];
         let target = temp(&format!("linear{rows}.h5"));
-        Recording::from(rec).to_hdf5(path(&target)).unwrap();
+        one(rec).to_hdf5(path(&target)).unwrap();
         let back = Recording::from_hdf5(path(&target)).unwrap();
-        assert_eq!(back.counter().len(), rows);
-        match &back.hardware_metadata.channel1_metadata.compensations[..] {
+        assert_eq!(only(&back).counter().len(), rows);
+        match &only(&back).hardware_metadata.channel1_metadata.compensations[..] {
             [g::CompensationOrSubtype::LinearConversion(l)] => assert_eq!((l.gain, l.offset), (2.5, -1.0)),
             other => panic!("{other:?}"),
         }
@@ -232,75 +250,75 @@ fn write_error(rec: Recording) -> String {
 
 #[test]
 fn compensations_the_format_cannot_hold_are_refused() {
-    let mut rec = recording(2, 10).into_inner();
+    let mut rec = source("source1", 2, 10);
     rec.hardware_metadata.channel2_metadata.as_mut().unwrap().compensations =
         vec![g::CompensationOrSubtype::PolynomialConversion(g::PolynomialConversion { order: 0, coefficients: vec![0.0, 1.0] })];
-    let error = write_error(rec.into());
+    let error = write_error(one(rec));
     assert!(error.contains("channel2") && error.contains("PolynomialConversion") && error.contains("not representable"), "{error}");
 
     for other in [
         g::CompensationOrSubtype::FrequencyCompensation(g::FrequencyCompensation { order: 0 }),
         g::CompensationOrSubtype::Conversion(g::Conversion { order: 0 }),
     ] {
-        let mut rec = recording(1, 10).into_inner();
+        let mut rec = source("source1", 1, 10);
         rec.hardware_metadata.channel1_metadata.compensations = vec![other];
-        assert!(write_error(rec.into()).contains("not representable"));
+        assert!(write_error(one(rec)).contains("not representable"));
     }
 
-    let mut rec = recording(1, 10).into_inner();
+    let mut rec = source("source1", 1, 10);
     rec.hardware_metadata.channel1_metadata.compensations = vec![no_conversion(), no_conversion()];
-    assert!(write_error(rec.into()).contains("2 compensations"));
-    let mut rec = recording(1, 10).into_inner();
+    assert!(write_error(one(rec)).contains("2 compensations"));
+    let mut rec = source("source1", 1, 10);
     rec.hardware_metadata.channel1_metadata.compensations = vec![];
-    assert!(write_error(rec.into()).contains("0 compensations"));
+    assert!(write_error(one(rec)).contains("0 compensations"));
 }
 
 #[test]
 fn hardware_revision_is_refused_because_the_format_has_no_place_for_it() {
-    let mut rec = recording(1, 10).into_inner();
+    let mut rec = source("source1", 1, 10);
     rec.hardware_metadata.revision = Some("B".into());
-    assert!(write_error(rec.into()).contains("revision is not stored"));
+    assert!(write_error(one(rec)).contains("revision is not stored"));
 }
 
 #[test]
 fn mixed_conversion_states_are_refused() {
-    let mut rec = recording(2, 10).into_inner();
+    let mut rec = source("source1", 2, 10);
     rec.hardware_metadata.channel2_metadata.as_mut().unwrap().compensations =
         vec![g::CompensationOrSubtype::LinearConversion(g::LinearConversion { order: 0, gain: 2.0, offset: 0.0 })];
-    assert!(write_error(rec.into()).contains("different already-converted states"));
+    assert!(write_error(one(rec)).contains("different already-converted states"));
 }
 
 #[test]
 fn malformed_columns_are_refused() {
-    let mut rec = recording(2, 10).into_inner();
+    let mut rec = source("source1", 2, 10);
     rec.recording_data.channel2 = Some(vec![1.0; 9]);
-    assert!(write_error(rec.into()).contains("same length"));
+    assert!(write_error(one(rec)).contains("same length"));
 
-    let mut rec = recording(1, 10).into_inner();
-    rec.recording_data.counter[3] = 256;
-    assert!(write_error(rec.into()).contains("does not fit in 8 bits"));
+    let mut rec = source("source1", 1, 10);
+    rec.recording_data.counter.as_mut().unwrap()[3] = 256;
+    assert!(write_error(one(rec)).contains("does not fit in 8 bits"));
 
-    let mut rec = recording(1, 10).into_inner();
+    let mut rec = source("source1", 1, 10);
     rec.recording_data.timestamp[3] = -1;
-    assert!(write_error(rec.into()).contains("negative"));
+    assert!(write_error(one(rec)).contains("negative"));
 
-    let mut rec = recording(3, 10).into_inner();
+    let mut rec = source("source1", 3, 10);
     rec.recording_data.channel2 = None; // channel3 without channel2
-    assert!(write_error(rec.into()).contains("earlier channel"));
+    assert!(write_error(one(rec)).contains("earlier channel"));
 
-    let mut rec = recording(1, 10).into_inner();
+    let mut rec = source("source1", 1, 10);
     rec.recording_data.channel1 = vec![]; // samples, but no channel data
-    assert!(write_error(rec.into()).contains("at least channel1"));
+    assert!(write_error(one(rec)).contains("at least channel1"));
 }
 
 #[test]
 fn texts_that_do_not_fit_their_field_are_refused() {
-    let mut rec = recording(1, 10).into_inner();
+    let mut rec = source("source1", 1, 10);
     rec.hardware_metadata.channel1_metadata.sensor.name = Some("x".repeat(101));
-    assert!(write_error(rec.into()).contains("does not fit in 100 bytes"));
-    let mut rec = recording(1, 10).into_inner();
+    assert!(write_error(one(rec)).contains("does not fit in 100 bytes"));
+    let mut rec = source("source1", 1, 10);
     rec.hardware_metadata.channel1_metadata.sensor.unit = Some("12345678901".into());
-    assert!(write_error(rec.into()).contains("does not fit in 10 bytes"));
+    assert!(write_error(one(rec)).contains("does not fit in 10 bytes"));
 }
 
 #[test]
@@ -396,18 +414,19 @@ fn a_preprocessed_table_must_fit_the_recording() {
         sampling_frequency_source: g::SamplingFrequencySource::Default,
         fill_method: "forward_fill".into(),
         producer: "t@1".into(),
+        source: None,
     };
     let bundle = DatasetBundle::new(rec);
-    let error = |p| bundle.clone().with_preprocessed(p).unwrap_err().to_string();
+    let error = |p| bundle.clone().with_preprocessed(p, None).unwrap_err().to_string();
     assert!(error(table(grid, false, 100.0)).contains("channels [\"channel1\"], but the recording has [\"channel1\", \"channel2\"]"));
     assert!(error(table(grid - 1, true, 100.0)).contains("has 9 rows, but the recording's gap-free grid has 10"));
     assert!(error(table(grid, true, 0.0)).contains("positive and finite"));
     assert!(error(table(grid, true, f64::INFINITY)).contains("positive and finite"));
-    let ok = bundle.clone().with_preprocessed(table(grid, true, 100.0)).unwrap();
+    let ok = bundle.clone().with_preprocessed(table(grid, true, 100.0), None).unwrap();
 
     let again = ok.clone().with_recording(recording(2, 10)).unwrap_err().to_string();
     assert!(again.contains("without_preprocessed"), "{again}");
-    assert!(ok.without_preprocessed().with_recording(recording(2, 20)).is_ok());
+    assert!(ok.without_preprocessed(None).unwrap().with_recording(recording(2, 20)).is_ok());
 }
 
 // ── files ───────────────────────────────────────────────────────────────────
@@ -417,9 +436,9 @@ fn writing_replaces_an_existing_file_and_creates_folders() {
     let target = temp("nested/deeper/out.h5");
     let _ = std::fs::remove_dir_all(target.parent().unwrap());
     recording(1, 10).to_hdf5(path(&target)).unwrap();
-    assert_eq!(Recording::from_hdf5(path(&target)).unwrap().counter().len(), 10);
+    assert_eq!(only(&Recording::from_hdf5(path(&target)).unwrap()).counter().len(), 10);
     recording(1, 30).to_hdf5(path(&target)).unwrap(); // overwrites
-    assert_eq!(Recording::from_hdf5(path(&target)).unwrap().counter().len(), 30);
+    assert_eq!(only(&Recording::from_hdf5(path(&target)).unwrap()).counter().len(), 30);
     assert!(!PathBuf::from(format!("{}.tmp", path(&target))).exists());
 }
 
@@ -427,10 +446,10 @@ fn writing_replaces_an_existing_file_and_creates_folders() {
 fn a_failed_write_keeps_the_previous_file() {
     let target = temp("keep.h5");
     recording(1, 10).to_hdf5(path(&target)).unwrap();
-    let mut bad = recording(1, 10).into_inner();
-    bad.recording_data.counter[0] = 1000;
-    assert!(Recording::from(bad).to_hdf5(path(&target)).is_err());
-    assert_eq!(Recording::from_hdf5(path(&target)).unwrap().counter().len(), 10, "the old file must survive");
+    let mut bad = source("source1", 1, 10);
+    bad.recording_data.counter.as_mut().unwrap()[0] = 1000;
+    assert!(one(bad).to_hdf5(path(&target)).is_err());
+    assert_eq!(only(&Recording::from_hdf5(path(&target)).unwrap()).counter().len(), 10, "the old file must survive");
 }
 
 #[test]

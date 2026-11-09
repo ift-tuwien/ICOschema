@@ -139,6 +139,107 @@ write(OUT / "err_four_channels.h5", table(counter_steps(1, 10), 4), sens=sensors
 write(OUT / "err_unconverted_no_sensors.h5", table(counter_steps(1, 10), 1), attrs={"conversion": "false"})
 
 
+# 10. several sources (1.3), waveform sources without a packet counter (1.4), the pre-1.4 TDMS JSON
+from icoschema import Recording
+
+
+def meta(i, unit="g", name=None):
+    return g.ChannelMetadata(
+        sensor=g.Sensor(sensor_id=f"s{i}", sensor_type="ADXL1001", name=name or f"Sensor {i}", unit=unit,
+                        dimension="Acceleration", phys_min=-100.0, phys_max=100.0, volt_min=0.0, volt_max=3.3),
+        compensations=[g.NoConversion(order=0)])
+
+
+def hardware(channels, **adc):
+    return g.HardwareMetadata(adc_reference_voltage="3.3", **adc,
+                              **{f"channel{i + 1}_metadata": meta(i + 1) for i in range(channels)})
+
+
+def columns(n, channels):
+    return {f"channel{i + 1}": [float(v) for v in rng.normal(size=n) * (i + 1)] for i in range(channels)}
+
+
+def packet_source(name, packets, start, lose=(), channels=1, **extra):
+    counter = [int(c) for c in counter_steps(1, packets, lose=set(lose))]
+    n = len(counter)
+    return g.Source(
+        name=name, hardware_metadata=hardware(channels, adc_prescaler=2, adc_acquisition_time=8, adc_oversample_rate=64),
+        recording_metadata=g.RecordingMetadata(start_time=start),
+        recording_data=g.RecordingData(timestamp=[i * 100 + 5 for i in range(n)], counter=counter, **columns(n, channels)),
+        **extra)
+
+
+def waveform_source(name, rows, start, fs, quality=None, channels=1, **extra):
+    return g.Source(
+        name=name, hardware_metadata=hardware(channels), sampling_frequency=fs,
+        quality=None if quality is None else g.QualityChannel(values=quality, sampling_frequency=10.0),
+        recording_metadata=g.RecordingMetadata(start_time=start),
+        recording_data=g.RecordingData(timestamp=[round(i * 1e6 / fs) for i in range(rows)], **columns(rows, channels)),
+        **extra)
+
+
+def preprocessed_for(recording, name, fill):
+    s = recording.sources[name]
+    n = int(s.sample_index()[-1]) + 1
+    freq, _ = s.channel_sampling_frequency()
+    return g.PreprocessedRecording(
+        source=name, timestamp=[int(s.timestamps[0]) + round(j * 1e6 / freq) for j in range(n)],
+        **{f"channel{i + 1}": [fill + i] * n for i in range(s.channel_count)},
+        channel_sampling_frequency=freq, sampling_frequency_source="hardware", fill_method="forward_fill", producer="test@1")
+
+
+def result(key, values=(1.0, 2.0)):
+    return g.DerivedDataset(key=key, values=list(values), shape=[len(values)], dtype="float64")
+
+
+def step(node, **kw):
+    return g.ComputationStep(node=node, step_index=0, producer="rms@1", status="ok", **kw)
+
+
+multi = DatasetBundle(recording=Recording(sources=[
+    packet_source("a", 120, "2026-01-01T00:00:00", lose={5, 40}, channels=2, stu_id="STU1", sth_id="STH1"),
+    packet_source("b", 90, "2026-01-01T00:00:07.250000", lose={10}, stu_id="STU2")]))
+multi = multi.with_preprocessed(preprocessed_for(multi.recording, "b", 0.5))
+for key in ("rms_a/channel1", "rms_b/channel1", "mix/channel1", "mix_a/channel1", "free/channel1", "loose/channel1"):
+    multi = multi.with_computation(key, result(key))
+multi = (multi
+         .with_step(step("rms_a", source_node="a", output_keys=["rms_a/channel1"]))
+         .with_step(step("rms_b", source_node="preprocessed:b", output_keys=["rms_b/channel1"]))
+         .with_step(step("mix", inputs=["rms_a", "rms_b"], output_keys=["mix/channel1"]))
+         .with_step(step("mix_a", inputs=["rms_a"], output_keys=["mix_a/channel1"]))
+         .with_step(step("free", output_keys=["free/channel1"])))
+multi.to_hdf5(str(OUT / "multi_source.h5"))
+
+waveform = DatasetBundle(recording=Recording(sources=[
+    waveform_source("source1", 300, "2025-04-17T14:08:29.342295", 9523.80952, quality=[100.0, 99.0, 98.5, 100.0],
+                    channels=2, additional_data='{"file": {"name": "t"}, "group": null}')]))
+waveform = waveform.with_preprocessed(preprocessed_for(waveform.recording, "source1", 1.0))
+waveform = waveform.with_computation("rms/channel1", result("rms/channel1")).with_step(
+    step("rms", source_node="preprocessed", output_keys=["rms/channel1"]))
+waveform.to_hdf5(str(OUT / "waveform_single.h5"))
+
+waveform_multi = DatasetBundle(recording=Recording(sources=[
+    waveform_source("STU1", 200, "2025-04-17T14:08:29.342295", 9523.80952, quality=[100.0, 90.0], stu_id="STU1"),
+    waveform_source("STU2", 150, "2025-04-17T14:08:36.842295", 2000.0, quality=[100.0, 80.0, 70.0], channels=2,
+                    stu_id="STU2", additional_data='{"channels": {"x": {"unit_string": "g"}}}'),
+    waveform_source("STU3", 100, "2025-04-17T14:08:20.000000", 4000.0),  # no quality: loss unknown
+    packet_source("pkt", 60, "2025-04-17T14:08:30.000000", lose={3})]))
+waveform_multi = waveform_multi.with_preprocessed(preprocessed_for(waveform_multi.recording, "STU2", 3.0))
+waveform_multi.to_hdf5(str(OUT / "waveform_multi.h5"))
+
+legacy_json = DatasetBundle(recording=Recording(sources=[packet_source("source1", 100, "2026-02-03T04:05:06", lose={7})]))
+legacy_json.recording.sources["source1"].recording_metadata.post_metadata = (
+    '{"tdms": {"sampling_frequency": 5000.0, "signal_loss_percentage": 2.5, "signal_loss_measured": true}, "other": 1}')
+legacy_json.to_hdf5(str(OUT / "legacy_tdms_json.h5"))
+
+# 11. rejected: a `sources` attribute that disagrees with the groups
+for name, listed in (("err_duplicate_sources.h5", ["a", "a"]), ("err_missing_source_group.h5", ["a", "zzz"])):
+    shutil.copyfile(OUT / "multi_source.h5", OUT / name)
+    with h5py.File(OUT / name, "r+") as f:
+        del f.attrs["sources"]
+        f.attrs.create("sources", listed, dtype=h5py.string_dtype())
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dump import dump
 

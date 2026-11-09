@@ -76,15 +76,22 @@ pub type counter = Vec<isize>;
 pub type channel1 = String;
 pub type channel2 = String;
 pub type channel3 = String;
+pub type stu_id = String;
+pub type sth_id = String;
+pub type sampling_frequency = String;
+pub type quality = QualityChannel;
+pub type additional_data = String;
 pub type hardware_metadata = HardwareMetadata;
 pub type recording_metadata = RecordingMetadata;
 pub type recording_data = RecordingData;
+pub type values = String;
+pub type sources = Vec<Source>;
 pub type channel_sampling_frequency = f64;
 pub type sampling_frequency_source = SamplingFrequencySource;
 pub type fill_method = String;
 pub type producer = String;
+pub type source = String;
 pub type key = String;
-pub type values = Vec<f64>;
 pub type shape = Vec<isize>;
 pub type dtype = String;
 pub type produced_by = String;
@@ -102,8 +109,14 @@ pub type output_keys = Vec<String>;
 pub type started_at = String;
 pub type duration_s = f64;
 pub type environment = String;
+pub type source_node = String;
+pub type source_format = String;
+pub type source_format_version = String;
+pub type reader = String;
+pub type writer = String;
 pub type recording = Recording;
-pub type preprocessed = PreprocessedRecording;
+pub type provenance = Provenance;
+pub type preprocessed_tables = Vec<PreprocessedRecording>;
 pub type computations = Vec<DerivedDataset>;
 pub type steps = Vec<ComputationStep>;
 
@@ -870,11 +883,11 @@ pub struct RecordingData {
     #[cfg_attr(feature = "serde", serde(default))]
     pub timestamp: Vec<isize>,
     #[cfg_attr(feature = "serde", serde(
-        deserialize_with = "serde_utils::deserialize_primitive_list_or_single_value",
-        serialize_with = "serde_utils::serialize_primitive_list_or_single_value"
+        deserialize_with = "serde_utils::deserialize_primitive_list_or_single_value_optional",
+        serialize_with = "serde_utils::serialize_primitive_list_or_single_value_optional"
     ))]
     #[cfg_attr(feature = "serde", serde(default))]
-    pub counter: Vec<isize>,
+    pub counter: Option<Vec<isize>>,
     #[cfg_attr(feature = "serde", serde(
         deserialize_with = "serde_utils::deserialize_primitive_list_or_single_value",
         serialize_with = "serde_utils::serialize_primitive_list_or_single_value"
@@ -899,9 +912,9 @@ pub struct RecordingData {
 #[pymethods]
 impl RecordingData {
     #[new]
-    #[pyo3(signature = (timestamp, counter, channel1, channel2=None, channel3=None))]
-    pub fn new(timestamp: Vec<isize>, counter: Vec<isize>, channel1: Vec<f64>, channel2: Option<Vec<f64>>, channel3: Option<Vec<f64>>) -> Self {
-        RecordingData{timestamp, counter, channel1, channel2, channel3}
+    #[pyo3(signature = (timestamp, channel1, counter=None, channel2=None, channel3=None))]
+    pub fn new(timestamp: Vec<isize>, channel1: Vec<f64>, counter: Option<Vec<isize>>, channel2: Option<Vec<f64>>, channel3: Option<Vec<f64>>) -> Self {
+        RecordingData{timestamp, channel1, counter, channel2, channel3}
     }
 }
 
@@ -934,7 +947,18 @@ impl<'py> FromPyObject<'py> for Box<RecordingData> {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "stubgen", gen_stub_pyclass)]
 #[cfg_attr(feature = "pyo3", pyclass(subclass, get_all, set_all))]
-pub struct Recording {
+pub struct Source {
+    pub name: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub stu_id: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub sth_id: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub sampling_frequency: Option<f64>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub quality: Option<QualityChannel>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub additional_data: Option<String>,
     pub hardware_metadata: HardwareMetadata,
     pub recording_metadata: RecordingMetadata,
     pub recording_data: RecordingData
@@ -942,14 +966,159 @@ pub struct Recording {
 #[cfg(feature = "pyo3")]
 #[cfg_attr(feature = "stubgen", gen_stub_pymethods)]
 #[pymethods]
-impl Recording {
+impl Source {
     #[new]
-    #[pyo3(signature = (hardware_metadata, recording_metadata, recording_data))]
-    pub fn new(hardware_metadata: serde_utils::PyValue<HardwareMetadata>, recording_metadata: serde_utils::PyValue<RecordingMetadata>, recording_data: serde_utils::PyValue<RecordingData>) -> Self {
+    #[pyo3(signature = (name, hardware_metadata, recording_metadata, recording_data, stu_id=None, sth_id=None, sampling_frequency=None, quality=None, additional_data=None))]
+    pub fn new(name: String, hardware_metadata: serde_utils::PyValue<HardwareMetadata>, recording_metadata: serde_utils::PyValue<RecordingMetadata>, recording_data: serde_utils::PyValue<RecordingData>, stu_id: Option<String>, sth_id: Option<String>, sampling_frequency: Option<f64>, quality: Option<serde_utils::PyValue<QualityChannel>>, additional_data: Option<String>) -> Self {
         let hardware_metadata = hardware_metadata.into_inner();
         let recording_metadata = recording_metadata.into_inner();
         let recording_data = recording_data.into_inner();
-        Recording{hardware_metadata, recording_metadata, recording_data}
+        let quality = quality.map(|v| v.into_inner());
+        Source{name, hardware_metadata, recording_metadata, recording_data, stu_id, sth_id, sampling_frequency, quality, additional_data}
+    }
+}
+
+#[cfg(feature = "pyo3")]
+impl<'py> IntoPyObject<'py> for Box<Source>
+{
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        (*self).into_pyobject(py).map(move |x| x.into_any())
+    }
+}
+
+#[cfg(feature = "pyo3")]
+impl<'py> FromPyObject<'py> for Box<Source> {
+    fn extract_bound(ob: &pyo3::Bound<'py, pyo3::types::PyAny>) -> pyo3::PyResult<Self> {
+        if let Ok(val) = ob.extract::<Source>() {
+            return Ok(Box::new(val));
+        }
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "invalid Source",
+        ))
+    }
+}
+
+
+#[cfg(feature = "serde")]
+impl serde_utils::InlinedPair for Source {
+    type Key   = String;
+    type Value = Value;
+    type Error = String;
+
+    fn extract_key(&self) -> &Self::Key {
+        return &self.name;
+    }
+
+    fn from_pair_mapping(k: Self::Key, v: Value) -> Result<Self,Self::Error> {
+        let mut map = match v {
+            Value::Map(m) => m,
+            _ => return Err("ClassDefinition must be a mapping".into()),
+        };
+        let key_value = serde_value::to_value(k.clone())
+            .map_err(|e| format!("unable to serialize key: {}", e))?;
+        map.insert(Value::String("name".into()), key_value);
+        let de          = Value::Map(map).into_deserializer();
+        match serde_path_to_error::deserialize(de) {
+            Ok(ok)  => Ok(ok),
+            Err(e)  => Err(format!("at `{}`: {}", e.path(), e.inner())),
+        }
+    }
+
+
+    fn from_pair_simple(_k: Self::Key, _v: Value) -> Result<Self,Self::Error> {
+        Err("Cannot create a Source from a primitive value!".into())
+    }
+
+
+    fn compact_value(&self) -> Option<Value> {
+        let value = match serde_value::to_value(self) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        match value {
+            Value::Map(mut map) => {
+                map.remove(&Value::String("name".into()));
+                Some(Value::Map(map))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "stubgen", gen_stub_pyclass)]
+#[cfg_attr(feature = "pyo3", pyclass(subclass, get_all, set_all))]
+pub struct QualityChannel {
+    #[cfg_attr(feature = "serde", serde(
+        deserialize_with = "serde_utils::deserialize_primitive_list_or_single_value",
+        serialize_with = "serde_utils::serialize_primitive_list_or_single_value"
+    ))]
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub values: Vec<f64>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub sampling_frequency: Option<f64>
+}
+#[cfg(feature = "pyo3")]
+#[cfg_attr(feature = "stubgen", gen_stub_pymethods)]
+#[pymethods]
+impl QualityChannel {
+    #[new]
+    #[pyo3(signature = (values, sampling_frequency=None))]
+    pub fn new(values: Vec<f64>, sampling_frequency: Option<f64>) -> Self {
+        QualityChannel{values, sampling_frequency}
+    }
+}
+
+#[cfg(feature = "pyo3")]
+impl<'py> IntoPyObject<'py> for Box<QualityChannel>
+{
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        (*self).into_pyobject(py).map(move |x| x.into_any())
+    }
+}
+
+#[cfg(feature = "pyo3")]
+impl<'py> FromPyObject<'py> for Box<QualityChannel> {
+    fn extract_bound(ob: &pyo3::Bound<'py, pyo3::types::PyAny>) -> pyo3::PyResult<Self> {
+        if let Ok(val) = ob.extract::<QualityChannel>() {
+            return Ok(Box::new(val));
+        }
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "invalid QualityChannel",
+        ))
+    }
+}
+
+
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "stubgen", gen_stub_pyclass)]
+#[cfg_attr(feature = "pyo3", pyclass(subclass, get_all, set_all))]
+pub struct Recording {
+    #[cfg_attr(feature = "serde", serde(
+        deserialize_with = "serde_utils::deserialize_inlined_dict_map",
+        serialize_with = "serde_utils::serialize_inlined_dict_map"
+    ))]
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub sources: HashMap<String, Source>
+}
+#[cfg(feature = "pyo3")]
+#[cfg_attr(feature = "stubgen", gen_stub_pymethods)]
+#[pymethods]
+impl Recording {
+    #[new]
+    #[pyo3(signature = (sources))]
+    pub fn new(sources: serde_utils::PyValue<HashMap<String, Source>>) -> Self {
+        let sources = sources.into_inner();
+        Recording{sources}
     }
 }
 
@@ -1010,16 +1179,18 @@ pub struct PreprocessedRecording {
     pub channel_sampling_frequency: f64,
     pub sampling_frequency_source: SamplingFrequencySource,
     pub fill_method: String,
-    pub producer: String
+    pub producer: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub source: Option<String>
 }
 #[cfg(feature = "pyo3")]
 #[cfg_attr(feature = "stubgen", gen_stub_pymethods)]
 #[pymethods]
 impl PreprocessedRecording {
     #[new]
-    #[pyo3(signature = (timestamp, channel1, channel_sampling_frequency, sampling_frequency_source, fill_method, producer, channel2=None, channel3=None))]
-    pub fn new(timestamp: Vec<isize>, channel1: Vec<f64>, channel_sampling_frequency: f64, sampling_frequency_source: SamplingFrequencySource, fill_method: String, producer: String, channel2: Option<Vec<f64>>, channel3: Option<Vec<f64>>) -> Self {
-        PreprocessedRecording{timestamp, channel1, channel_sampling_frequency, sampling_frequency_source, fill_method, producer, channel2, channel3}
+    #[pyo3(signature = (timestamp, channel1, channel_sampling_frequency, sampling_frequency_source, fill_method, producer, channel2=None, channel3=None, source=None))]
+    pub fn new(timestamp: Vec<isize>, channel1: Vec<f64>, channel_sampling_frequency: f64, sampling_frequency_source: SamplingFrequencySource, fill_method: String, producer: String, channel2: Option<Vec<f64>>, channel3: Option<Vec<f64>>, source: Option<String>) -> Self {
+        PreprocessedRecording{timestamp, channel1, channel_sampling_frequency, sampling_frequency_source, fill_method, producer, channel2, channel3, source}
     }
 }
 
@@ -1194,16 +1365,18 @@ pub struct ComputationStep {
     #[cfg_attr(feature = "serde", serde(default))]
     pub duration_s: Option<f64>,
     #[cfg_attr(feature = "serde", serde(default))]
-    pub environment: Option<String>
+    pub environment: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub source_node: Option<String>
 }
 #[cfg(feature = "pyo3")]
 #[cfg_attr(feature = "stubgen", gen_stub_pymethods)]
 #[pymethods]
 impl ComputationStep {
     #[new]
-    #[pyo3(signature = (node, step_index, producer, params=None, resolved_params=None, inputs=None, status=None, error=None, summary=None, output_keys=None, started_at=None, duration_s=None, environment=None))]
-    pub fn new(node: String, step_index: isize, producer: String, params: Option<String>, resolved_params: Option<String>, inputs: Option<Vec<String>>, status: Option<ComputationStatus>, error: Option<String>, summary: Option<String>, output_keys: Option<Vec<String>>, started_at: Option<String>, duration_s: Option<f64>, environment: Option<String>) -> Self {
-        ComputationStep{node, step_index, producer, params, resolved_params, inputs, status, error, summary, output_keys, started_at, duration_s, environment}
+    #[pyo3(signature = (node, step_index, producer, params=None, resolved_params=None, inputs=None, status=None, error=None, summary=None, output_keys=None, started_at=None, duration_s=None, environment=None, source_node=None))]
+    pub fn new(node: String, step_index: isize, producer: String, params: Option<String>, resolved_params: Option<String>, inputs: Option<Vec<String>>, status: Option<ComputationStatus>, error: Option<String>, summary: Option<String>, output_keys: Option<Vec<String>>, started_at: Option<String>, duration_s: Option<f64>, environment: Option<String>, source_node: Option<String>) -> Self {
+        ComputationStep{node, step_index, producer, params, resolved_params, inputs, status, error, summary, output_keys, started_at, duration_s, environment, source_node}
     }
 }
 
@@ -1281,10 +1454,62 @@ impl serde_utils::InlinedPair for ComputationStep {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "stubgen", gen_stub_pyclass)]
 #[cfg_attr(feature = "pyo3", pyclass(subclass, get_all, set_all))]
+pub struct Provenance {
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub source_format: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub source_format_version: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub reader: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub writer: Option<String>
+}
+#[cfg(feature = "pyo3")]
+#[cfg_attr(feature = "stubgen", gen_stub_pymethods)]
+#[pymethods]
+impl Provenance {
+    #[new]
+    #[pyo3(signature = (source_format=None, source_format_version=None, reader=None, writer=None))]
+    pub fn new(source_format: Option<String>, source_format_version: Option<String>, reader: Option<String>, writer: Option<String>) -> Self {
+        Provenance{source_format, source_format_version, reader, writer}
+    }
+}
+
+#[cfg(feature = "pyo3")]
+impl<'py> IntoPyObject<'py> for Box<Provenance>
+{
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        (*self).into_pyobject(py).map(move |x| x.into_any())
+    }
+}
+
+#[cfg(feature = "pyo3")]
+impl<'py> FromPyObject<'py> for Box<Provenance> {
+    fn extract_bound(ob: &pyo3::Bound<'py, pyo3::types::PyAny>) -> pyo3::PyResult<Self> {
+        if let Ok(val) = ob.extract::<Provenance>() {
+            return Ok(Box::new(val));
+        }
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "invalid Provenance",
+        ))
+    }
+}
+
+
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "stubgen", gen_stub_pyclass)]
+#[cfg_attr(feature = "pyo3", pyclass(subclass, get_all, set_all))]
 pub struct DatasetBundle {
     pub recording: Recording,
     #[cfg_attr(feature = "serde", serde(default))]
-    pub preprocessed: Option<PreprocessedRecording>,
+    pub provenance: Option<Provenance>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub preprocessed_tables: Option<Vec<PreprocessedRecording>>,
     #[cfg_attr(feature = "serde", serde(
         deserialize_with = "serde_utils::deserialize_inlined_dict_map_optional",
         serialize_with = "serde_utils::serialize_inlined_dict_map_optional"
@@ -1303,13 +1528,14 @@ pub struct DatasetBundle {
 #[pymethods]
 impl DatasetBundle {
     #[new]
-    #[pyo3(signature = (recording, preprocessed=None, computations=None, steps=None))]
-    pub fn new(recording: serde_utils::PyValue<Recording>, preprocessed: Option<serde_utils::PyValue<PreprocessedRecording>>, computations: Option<serde_utils::PyValue<HashMap<String, DerivedDataset>>>, steps: Option<serde_utils::PyValue<Vec<ComputationStep>>>) -> Self {
+    #[pyo3(signature = (recording, provenance=None, preprocessed_tables=None, computations=None, steps=None))]
+    pub fn new(recording: serde_utils::PyValue<Recording>, provenance: Option<serde_utils::PyValue<Provenance>>, preprocessed_tables: Option<serde_utils::PyValue<Vec<PreprocessedRecording>>>, computations: Option<serde_utils::PyValue<HashMap<String, DerivedDataset>>>, steps: Option<serde_utils::PyValue<Vec<ComputationStep>>>) -> Self {
         let recording = recording.into_inner();
-        let preprocessed = preprocessed.map(|v| v.into_inner());
+        let provenance = provenance.map(|v| v.into_inner());
+        let preprocessed_tables = preprocessed_tables.map(|v| v.into_inner());
         let computations = computations.map(|v| v.into_inner());
         let steps = steps.map(|v| v.into_inner());
-        DatasetBundle{recording, preprocessed, computations, steps}
+        DatasetBundle{recording, provenance, preprocessed_tables, computations, steps}
     }
 }
 
