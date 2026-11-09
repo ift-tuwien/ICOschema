@@ -41,6 +41,9 @@ from icoschema.schema.generated.python.dataset import ComputationStep, DerivedDa
 
 _CHANNELS = ("channel1", "channel2", "channel3")
 
+HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+TDMS_SIGNATURE = b"TDSm"
+
 PREPROCESSED_NODE = "preprocessed"
 """`source_node` for the preprocessed table of a single-source recording."""
 PREPROCESSED_PREFIX = "preprocessed:"
@@ -118,6 +121,27 @@ class DatasetBundle(generated.DatasetBundle):
         for table in loaded.preprocessed_tables:
             bundle = bundle.with_preprocessed(table)
         return bundle
+
+    @classmethod
+    def from_tdms(cls, path: str) -> DatasetBundle:
+        """Load a DatasetBundle (just the recording) from an NI TDMS file.
+
+        TDMS is read-only: save results with `to_hdf5`. Needs the `tdms`
+        extra. See ICOschema.storage.python.tdms for the accepted layouts.
+        """
+        return cls(recording=Recording.from_tdms(path))
+
+    @classmethod
+    def from_file(cls, path: str) -> DatasetBundle:
+        """Load a DatasetBundle from an HDF5 or TDMS file, told apart by the
+        file's first bytes (not its name)."""
+        with open(path, "rb") as f:
+            head = f.read(8)
+        if head.startswith(TDMS_SIGNATURE):
+            return cls.from_tdms(path)
+        if head == HDF5_SIGNATURE:
+            return cls.from_hdf5(path)
+        raise ValueError(f"{path!r} is neither an HDF5 nor a TDMS file")
 
     def to_hdf5(self, path: str) -> None:
         """Write this bundle (recording, preprocessed tables, every

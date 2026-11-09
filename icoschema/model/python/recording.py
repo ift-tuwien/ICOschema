@@ -94,6 +94,15 @@ class Recording(generated.Recording):
 
         return cls(sources=list(hdf5.load_recording(path).sources.values()))
 
+    @classmethod
+    def from_tdms(cls, path: str) -> Recording:
+        """Load a Recording from an NI TDMS file (read-only; needs the `tdms`
+        extra). See ICOschema.storage.python.tdms for the accepted layouts and
+        the legacy/versioned format dispatch."""
+        from icoschema.storage.python import tdms
+
+        return cls(sources=list(tdms.load_recording(path).sources.values()))
+
     def to_hdf5(self, path: str) -> None:
         """Write this recording to a fresh HDF5 file in the current format.
 

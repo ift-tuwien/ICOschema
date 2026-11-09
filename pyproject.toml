@@ -11,8 +11,11 @@ dependencies = [
   "pandas>=3.0.3",
 ]
 
+[project.optional-dependencies]
+tdms = ["nptdms>=1.10"]  # reading .tdms files (DatasetBundle.from_tdms)
+
 [dependency-groups]
-dev = ["pandas-stubs>=3.0.3.260530", "pytest>=9.1.1", "ruff>=0.16.7"]
+dev = ["nptdms>=1.10", "pandas-stubs>=3.0.3.260530", "pytest>=9.1.1", "ruff>=0.16.7"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

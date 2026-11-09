@@ -38,6 +38,16 @@ bundle = bundle.with_computation("wavelet_coefficients/channel1/details", derive
 bundle.to_hdf5("some_file.hdf5")
 ```
 
+### TDMS files (read-only)
+
+`DatasetBundle.from_tdms(path)` / `Recording.from_tdms(path)` read an NI TDMS file (`pip install icoschema[tdms]`), and
+`DatasetBundle.from_file(path)` takes either format, told apart by the file's first bytes. Like HDF5, reading dispatches
+on a format version, here the root property `icoschema_format_version`; a file without one is read with the *legacy*
+layout (`rawdata` group, `signalQuality` channels, one source per STU group), documented in
+`icoschema/storage/python/tdms.py`. The sampling frequency and the signal loss it derives are stored as JSON under the
+key `tdms` (`icoschema.storage.python.tdms.TDMS_METADATA_KEY`) of each source's `post_metadata`, since a TDMS waveform
+has no packet counter. There is no TDMS writer: save results with `to_hdf5`.
+
 ### Sources (STU/STH combinations)
 
 A `Recording` holds one or more independent `Source`s, one per STU/STH combination, each with its own clock
