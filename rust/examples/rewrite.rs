@@ -3,5 +3,5 @@
 fn main() -> icoschema::Result<()> {
     let mut args = std::env::args().skip(1);
     let (input, output) = (args.next().expect("input"), args.next().expect("output"));
-    icoschema::DatasetBundle::from_hdf5(&input)?.to_hdf5(&output)
+    icoschema::DatasetBundle::from_file(&input)?.to_hdf5(&output)
 }

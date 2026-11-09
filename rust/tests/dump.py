@@ -4,6 +4,8 @@ Used to build `expected*.json` (gen_fixtures.py) and to check files the Rust wri
 Sources and preprocessed tables are lists (in source order), since JSON objects have no order.
 """
 
+import json
+
 from icoschema import DatasetBundle
 
 
@@ -24,11 +26,21 @@ def attempt(fn):
     except Exception as e:  # noqa: BLE001
         return {"error": type(e).__name__}
 
+def opaque_json(text):
+    """`additional_data` is opaque JSON text: compared as data (key order and spacing are the writer's business)."""
+    if text is None:
+        return None
+    try:
+        return {"json": json.loads(text)}
+    except ValueError:
+        return {"text": text}
+
+
 def dump_source(r):
     h, m = r.hardware_metadata, r.recording_metadata
     return {
         "name": str(r.name), "stu_id": r.stu_id, "sth_id": r.sth_id,
-        "sampling_frequency": r.sampling_frequency, "additional_data": r.additional_data,
+        "sampling_frequency": r.sampling_frequency, "additional_data": opaque_json(r.additional_data),
         "quality": None if r.quality is None else {"values": [float(v) for v in r.quality.values],
                                                     "sampling_frequency": r.quality.sampling_frequency},
         "start_time": m.start_time, "pre_metadata": m.pre_metadata, "post_metadata": m.post_metadata,

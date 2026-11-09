@@ -4,7 +4,7 @@ use std::time::Instant;
 fn main() -> icoschema::Result<()> {
     let path = std::env::args().nth(1).unwrap();
     let t = Instant::now();
-    let b = DatasetBundle::from_hdf5(&path)?;
+    let b = DatasetBundle::from_file(&path)?;
     println!("loaded in {:?}", t.elapsed());
     println!("provenance {:?}", b.provenance);
     println!("sources {:?} start offsets {:?}", b.recording.source_names(), b.recording.start_offsets()?);

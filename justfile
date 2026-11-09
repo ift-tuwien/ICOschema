@@ -43,6 +43,7 @@ test-rust: check-generated
 [group('test')]
 rust-fixtures: setup
 	uv run python rust/tests/gen_fixtures.py
+	uv run python rust/tests/gen_tdms_fixtures.py
 
 # Release new package version
 [group('release')]

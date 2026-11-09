@@ -211262,7 +211262,15 @@
     "stu_id": "STU2",
     "sth_id": null,
     "sampling_frequency": 2000.0,
-    "additional_data": "{\"channels\": {\"x\": {\"unit_string\": \"g\"}}}",
+    "additional_data": {
+     "json": {
+      "channels": {
+       "x": {
+        "unit_string": "g"
+       }
+      }
+     }
+    },
     "quality": {
      "values": [
       100.0,
@@ -213231,7 +213239,14 @@
     "stu_id": null,
     "sth_id": null,
     "sampling_frequency": 9523.80952,
-    "additional_data": "{\"file\": {\"name\": \"t\"}, \"group\": null}",
+    "additional_data": {
+     "json": {
+      "file": {
+       "name": "t"
+      },
+      "group": null
+     }
+    },
     "quality": {
      "values": [
       100.0,

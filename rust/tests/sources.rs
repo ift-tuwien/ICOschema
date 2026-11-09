@@ -438,9 +438,19 @@ fn from_file_tells_the_formats_apart_by_content_not_name() {
     std::fs::copy(&hdf5, &renamed).unwrap();
     assert!(DatasetBundle::from_file(path(&renamed)).is_ok());
 
+    // an HDF5 file with a user block has its signature further in
+    let with_user_block = fixtures().join("bundle_full_userblock.h5");
+    assert!(DatasetBundle::from_file(path(&with_user_block)).is_ok());
+
     let tdms = temp("data.tdms");
     std::fs::write(&tdms, b"TDSm\x69\x12\x00\x00rest").unwrap();
-    assert!(DatasetBundle::from_file(path(&tdms)).unwrap_err().to_string().contains("TDMS"));
+    // recognised as TDMS by its first bytes, then refused as the broken file it is
+    assert!(DatasetBundle::from_file(path(&tdms)).is_err());
+    #[cfg(feature = "tdms")]
+    {
+        let real_tdms = fixtures().join("tdms/two_stus.tdms");
+        assert_eq!(DatasetBundle::from_file(path(&real_tdms)).unwrap().recording.sources().len(), 2);
+    }
     let junk = temp("junk.hdf5");
     std::fs::write(&junk, b"not a recording").unwrap();
     assert!(DatasetBundle::from_file(path(&junk)).unwrap_err().to_string().contains("neither an HDF5 nor a TDMS"));

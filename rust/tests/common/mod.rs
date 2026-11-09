@@ -107,7 +107,15 @@ fn check_source(name: &str, r: &Source, want: &Value) {
     assert_eq!(r.stu_id, opt_str(&want["stu_id"]), "{name} stu_id");
     assert_eq!(r.sth_id, opt_str(&want["sth_id"]), "{name} sth_id");
     assert_eq!(r.sampling_frequency, opt_f64(&want["sampling_frequency"]), "{name} sampling_frequency");
-    assert_eq!(r.additional_data, opt_str(&want["additional_data"]), "{name} additional_data");
+    match (&r.additional_data, &want["additional_data"]) {
+        (None, Value::Null) => {}
+        (Some(got), want) if want.get("json").is_some() => {
+            let got: Value = serde_json::from_str(got).unwrap_or_else(|e| panic!("{name}: additional_data is not JSON: {e}"));
+            assert_eq!(&got, &want["json"], "{name} additional_data");
+        }
+        (Some(got), want) => assert_eq!(Some(got.as_str()), want["text"].as_str(), "{name} additional_data"),
+        (got, want) => panic!("{name}: additional_data {got:?} != {want}"),
+    }
     match (&r.quality, want["quality"].is_null()) {
         (None, true) => {}
         (Some(q), false) => {

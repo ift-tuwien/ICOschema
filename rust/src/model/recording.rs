@@ -43,6 +43,11 @@ impl Recording {
         Self::new(storage::hdf5::load_sources(path)?.into_iter().map(Source::from).collect())
     }
 
+    /// The recording of a TDMS file (see `DatasetBundle::from_tdms`).
+    pub fn from_tdms(path: &str) -> Result<Self> {
+        Ok(super::DatasetBundle::from_tdms(path)?.recording)
+    }
+
     /// Writes the recording alone to a fresh HDF5 file (format 1.0 for one packet source, 1.3
     /// for several, 1.4 if a source needs it).
     pub fn to_hdf5(&self, path: &str) -> Result<()> {

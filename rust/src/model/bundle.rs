@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 
 use icoschema_gen as g;
 
@@ -59,18 +59,57 @@ impl DatasetBundle {
         Ok(bundle)
     }
 
-    /// Loads an HDF5 file; a TDMS file is recognised by its first bytes (not its name) and
-    /// refused: the Rust port has no TDMS reader.
-    pub fn from_file(path: &str) -> Result<Self> {
-        let mut head = [0u8; 8];
-        let read = std::fs::File::open(path)
-            .and_then(|mut f| f.read(&mut head))
-            .map_err(|e| crate::Error::Invalid(format!("{path}: {e}")))?;
-        if read >= 4 && head[..4] == TDMS_SIGNATURE {
-            return invalid(format!("{path:?} is a TDMS file, which the Rust port cannot read (use the Python package)"));
+    /// Loads a TDMS file (read-only; needs the `tdms` feature, on by default). The bundle holds
+    /// just the recording: save results with `to_hdf5`. Warnings about the file (Python raises
+    /// them as `UserWarning`) go to standard error; `from_tdms_with_warnings` returns them.
+    pub fn from_tdms(path: &str) -> Result<Self> {
+        let (bundle, warnings) = Self::from_tdms_with_warnings(path)?;
+        for warning in warnings {
+            eprintln!("warning: {path}: {warning}");
         }
-        if head == HDF5_SIGNATURE {
-            return Self::from_hdf5(path);
+        Ok(bundle)
+    }
+
+    /// `from_tdms`, returning the warnings instead of printing them.
+    #[cfg(feature = "tdms")]
+    pub fn from_tdms_with_warnings(path: &str) -> Result<(Self, Vec<String>)> {
+        let loaded = storage::tdms::load(path)?;
+        let mut bundle = Self::new(Recording::new(loaded.sources.into_iter().map(Source::from).collect())?);
+        bundle.provenance = Some(g::Provenance {
+            source_format: Some("tdms".into()),
+            source_format_version: Some(loaded.version),
+            reader: Some(storage::software_id()),
+            writer: None,
+        });
+        Ok((bundle, loaded.warnings))
+    }
+
+    #[cfg(not(feature = "tdms"))]
+    pub fn from_tdms_with_warnings(_path: &str) -> Result<(Self, Vec<String>)> {
+        invalid("this build of icoschema has no TDMS reader (the `tdms` feature is off)")
+    }
+
+    /// Loads an HDF5 or TDMS file, told apart by the file's first bytes (not its name). An HDF5
+    /// file may start with a user block, so its signature is looked for where the format allows
+    /// it: at byte 0, 512, 1024, 2048, ...
+    pub fn from_file(path: &str) -> Result<Self> {
+        let io = |e: std::io::Error| crate::Error::Invalid(format!("{path}: {e}"));
+        let mut file = std::fs::File::open(path).map_err(io)?;
+        let length = file.metadata().map_err(io)?.len();
+        let mut head = [0u8; 4];
+        let read = file.read(&mut head).map_err(io)?;
+        if read == 4 && head == TDMS_SIGNATURE {
+            return Self::from_tdms(path);
+        }
+        let mut at = 0u64;
+        while at + 8 <= length {
+            let mut signature = [0u8; 8];
+            file.seek(SeekFrom::Start(at)).map_err(io)?;
+            file.read_exact(&mut signature).map_err(io)?;
+            if signature == HDF5_SIGNATURE {
+                return Self::from_hdf5(path);
+            }
+            at = if at == 0 { 512 } else { at * 2 };
         }
         invalid(format!("{path:?} is neither an HDF5 nor a TDMS file"))
     }

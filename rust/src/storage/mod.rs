@@ -1,5 +1,7 @@
 //! Storage adapters (internal; use `Recording::from_hdf5` / `DatasetBundle::from_hdf5`).
 pub mod hdf5;
+#[cfg(feature = "tdms")]
+pub mod tdms;
 mod table;
 mod vlen;
 pub mod write;

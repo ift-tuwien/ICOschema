@@ -8,8 +8,14 @@ publish = false
 [dependencies]
 icoschema-gen = { path = "../icoschema/schema/generated/rust", default-features = false }
 rust-hdf5 = "0.7"
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
+tedium = { version = "0.2", optional = true }
+
+[features]
+default = ["tdms"]
+# Reading TDMS files (storage::tdms), with the `tedium` crate.
+tdms = ["dep:tedium"]
 
 [dev-dependencies]
 serde_yml = "0.0.12"
