@@ -13,7 +13,6 @@ Rust must refuse the file too.
 import datetime
 import json
 import shutil
-import struct
 import sys
 import warnings
 from pathlib import Path
@@ -171,7 +170,7 @@ def dump_source(s, approximate=False):
         "quality": None if s.quality is None else {"values": [float(v) for v in s.quality.values],
                                                     "sampling_frequency": s.quality.sampling_frequency},
         "additional_data": json.loads(s.additional_data), "start_time": s.recording_metadata.start_time,
-        "channel_count": s.channel_count, "sensors": sensors, "rows": int(len(ts)),
+        "channel_count": s.channel_count, "sensors": sensors, "rows": len(ts),
         "timestamps_hash": fnv1a(ts.tobytes()), "timestamps_head": [int(v) for v in ts[:4]],
         "channel_hashes": [fnv1a(np.asarray(c, dtype="<f8").tobytes()) if c.size else None for c in channels],
         "channel1_head": [float(v) for v in first[:4]], "channel1_tail": [float(v) for v in first[-3:]],
