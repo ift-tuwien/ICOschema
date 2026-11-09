@@ -38,6 +38,20 @@ bundle = bundle.with_computation("wavelet_coefficients/channel1/details", derive
 bundle.to_hdf5("some_file.hdf5")
 ```
 
+### Sources (STU/STH combinations)
+
+A `Recording` holds one or more independent `Source`s, one per STU/STH combination, each with its own clock
+(`start_time`), packet counter, ADC settings (so its own sampling frequency) and sensors. Start times of different
+sources are not synchronized. For a single-source recording (everything read from today's files) the usual
+shortcuts keep working; with several sources they raise a `ValueError` and you pick a source:
+
+```python
+recording.channel1                          # single source only
+source = recording.sources["source1"]       # files without a stored name read as "source1"
+source.channel1, source.channel_sampling_frequency(), source.signal_loss_percentage
+recording.to_dataframe(source="source1")
+```
+
 ### Example use cases
 
 **Inspect a recording without loading a full DataFrame:**
@@ -102,6 +116,31 @@ The preprocessed channels mean exactly what the raw channels mean (same sensors 
 stays untouched; while a bundle has a preprocessed table, `with_recording` raises — call `without_preprocessed()`
 first.
 
+With several sources, a bundle holds one preprocessed table per source (each with its own grid and
+`channel_sampling_frequency`), and `bundle.preprocessed` — the shortcut for a single source — raises:
+
+```python
+bundle = bundle.with_preprocessed(preprocessed, source="source2")   # or set `PreprocessedRecording.source`
+bundle.preprocessed_for("source2")                                  # None if that source has none
+bundle = bundle.without_preprocessed("source2")                     # no argument: drop all
+```
+
+A step says where it read from with one name, `ComputationStep.source_node`, from a single namespace:
+
+| `source_node` | reads |
+|---|---|
+| `"source2"` | the raw recording of that source |
+| `"preprocessed:source2"` | the preprocessed table of that source (`"preprocessed"` if there is only one source) |
+| `"rms_source2"` | the computations of the earlier step with that `node` |
+| `None` | the raw recording of a single-source file |
+
+A step reading several things lists them in `inputs`. There is no separate "source" on steps or computations: a step's
+source follows from what it reads. `bundle.source_of(name)` traces any of the names above back to its source (`None`
+for a step over several sources), and `bundle.computations_for_source("source2")` selects what descends from one source.
+Step names must not collide with source names or the reserved `preprocessed` names; whether a `source_node` names a
+recorded step is not checked (it may have failed unrecorded). With several sources, run one step per source (e.g.
+`rms_source1`, `rms_source2`) so that computation keys stay unique.
+
 **Record the steps that produced the computations:**
 
 ```python
@@ -133,6 +172,11 @@ producer.
 - `1.2`: additionally a `/steps/` group (one attribute-only group per step). Written only when the bundle has steps;
   read back ordered by `step_index`. A malformed step, or one whose `output_keys` are missing, is skipped (or raises
   with `on_error="raise"`).
+- `1.3`: several sources (one per STU/STH combination). The root attribute `sources` lists their names in order, and
+  `/sources/<name>/` holds each source's table and `sensors` table the way a `1.0` file holds them at the root. May also
+  have `/steps/` and `/computations/`. Written only when the recording has more than one source: a single source keeps
+  the `1.0`-`1.2` layout (its name and STU/STH ids are stored as optional table attributes), so those files stay
+  readable by older versions. A preprocessed table, if a source has one, is stored in that source's group.
 - Legacy files (no version, table `acceleration`) are read as before.
 - A file with an empty or missing `sensors` table (old recordings) is read with an unspecified `Sensor()` (every field
   `None`) per channel and no conversion, as long as its `conversion` attribute is `true`; if it isn't, there is no
@@ -164,6 +208,12 @@ uv run pytest
 ```mermaid
 classDiagram
     class Recording {
+        +Map~string, Source~ sources
+    }
+    class Source {
+        +string name
+        +string stu_id
+        +string sth_id
         +HardwareMetadata hardware_metadata
         +RecordingMetadata recording_metadata
         +RecordingData recording_data
@@ -235,6 +285,7 @@ classDiagram
         +string description
     }
     class PreprocessedRecording {
+        +string source
         +int[] timestamp
         +float[] channel1
         +float[] channel2
@@ -250,6 +301,7 @@ classDiagram
         +string producer
         +string params
         +string resolved_params
+        +string source_node
         +string[] inputs
         +ComputationStatus status
         +string error
@@ -261,7 +313,7 @@ classDiagram
     }
     class DatasetBundle {
         +Recording recording
-        +PreprocessedRecording preprocessed
+        +PreprocessedRecording[] preprocessed_tables
         +Map~string, DerivedDataset~ computations
         +ComputationStep[] steps
     }
@@ -272,23 +324,24 @@ classDiagram
     Conversion <|-- LinearConversion
     Conversion <|-- PolynomialConversion
 
-    Recording *-- HardwareMetadata
-    Recording *-- RecordingMetadata
-    Recording *-- RecordingData
+    Recording *-- "1..*" Source
+    Source *-- HardwareMetadata
+    Source *-- RecordingMetadata
+    Source *-- RecordingData
     HardwareMetadata *-- "1" ChannelMetadata : channel1_metadata
     HardwareMetadata o-- "0..1" ChannelMetadata : channel2_metadata
     HardwareMetadata o-- "0..1" ChannelMetadata : channel3_metadata
     ChannelMetadata *-- Sensor
     ChannelMetadata *-- "1..*" Compensation : compensations
     DatasetBundle *-- Recording
-    DatasetBundle o-- "0..1" PreprocessedRecording : preprocessed
+    DatasetBundle o-- "0..*" PreprocessedRecording : preprocessed_tables (one per source)
     DatasetBundle o-- "0..*" DerivedDataset : computations
     DatasetBundle o-- "0..*" ComputationStep : steps
 ```
 
 ## Open questions
 
-- All channels in a `RecordingData` share one `timestamp`/`counter` array set, i.e. one sample rate per recording. Mixing sensors with different data rates on different channels isn't representable yet — would likely need a per-channel rate/timestamp instead of one shared pair.
+- All channels of one `Source` share one `timestamp`/`counter` array set, i.e. one sample rate per source. Mixing sensors with different data rates on different channels of the same STU/STH combination isn't representable — would likely need a per-channel rate/timestamp. Different *sources* may have different rates.
 
 ## Development
 

@@ -235,19 +235,56 @@ classes:
         description: >-
           Sensor channel 3 data.
 
-  Recording:
+  Source:
     description: >-
-      A complete recording: hardware/metadata plus per-sample sensor data.
+      The data of one acquisition source, i.e. one STU/STH combination: its
+      hardware/sensor metadata and its per-sample data. Sources are
+      independent -- each has its own clock (RecordingMetadata.start_time),
+      packet counter, ADC settings (hence its own sampling frequency) and
+      sensors -- so sources of one Recording may differ in all of these.
     attributes:
+      name:
+        range: string
+        identifier: true
+        description: >-
+          Unique name of this source within its Recording. Must be a single
+          HDF5 path segment (non-empty, no "/", not starting with ".").
+      stu_id:
+        range: string
+        description: >-
+          Identifier of the STU (stationary transceiver unit) of this
+          source's STU/STH combination.
+      sth_id:
+        range: string
+        description: >-
+          Identifier of the STH (sensory tool holder) of this source's
+          STU/STH combination.
       hardware_metadata:
         range: HardwareMetadata
         required: true
       recording_metadata:
         range: RecordingMetadata
         required: true
+        description: >-
+          Metadata of this source's recording. Timestamps of this source's
+          RecordingData are relative to its start_time; start times of
+          different sources are not synchronized.
       recording_data:
         range: RecordingData
         required: true
+
+  Recording:
+    description: >-
+      A complete recording: one or more independent Sources, each with its
+      hardware/metadata plus per-sample sensor data.
+    attributes:
+      sources:
+        range: Source
+        multivalued: true
+        required: true
+        inlined: true
+        description: >-
+          The recording's sources (at least one), keyed by Source.name.
 
   PreprocessedRecording:
     description: >-
@@ -257,7 +294,7 @@ classes:
       received raw row. Channel values are copied from RecordingData as
       stored, whatever their compensations say: they share the Recording's
       HardwareMetadata (sensors, compensations) and mean exactly what the raw
-      channels mean.
+      channels mean. Built from one Source of the Recording.
     attributes:
       timestamp:
         range: integer
@@ -311,6 +348,12 @@ classes:
         description: >-
           Free text identifying what produced this table (e.g.
           "icocompute@0.2.0").
+      source:
+        range: string
+        description: >-
+          Name of the Source this table was built from. May be left out when
+          the recording has exactly one source; a DatasetBundle always
+          records it.
 
   DerivedDataset:
     description: >-
@@ -407,8 +450,9 @@ classes:
         range: string
         multivalued: true
         description: >-
-          Names of the steps (or other sources) this step read from.
-          Informational.
+          Names (see `source_node`) of everything this step read from, for a
+          step with several inputs, e.g. two Sources.
+          Informational; `source_node` is the main one.
       status:
         range: ComputationStatus
         description: >-
@@ -441,21 +485,36 @@ classes:
         description: >-
           Opaque (e.g. JSON-encoded) description of the software the step ran
           with (e.g. library versions).
+      source_node:
+        range: string
+        description: >-
+          Where the step read its data from, one name in a single namespace:
+          a Source name (its raw recording), "preprocessed" (the preprocessed
+          table of a single-source recording), "preprocessed:<source>" (the
+          preprocessed table of that source), or the `node` of an earlier step
+          (reading that step's computations). Unset means the raw recording
+          of a single-source recording. Source names and step nodes must not
+          collide with each other or with the reserved "preprocessed" names.
+          Whether a step node exists is not checked -- the step it names may
+          have failed or been skipped without being recorded.
 
   DatasetBundle:
     description: >-
-      A Recording together with its optional PreprocessedRecording, every
-      DerivedDataset computed from them, and the ComputationSteps that
-      produced them.
+      A Recording together with its optional PreprocessedRecordings (at most
+      one per source), every DerivedDataset computed from them, and the
+      ComputationSteps that produced them.
     attributes:
       recording:
         range: Recording
         required: true
-      preprocessed:
+      preprocessed_tables:
         range: PreprocessedRecording
+        multivalued: true
+        inlined_as_list: true
         description: >-
-          `recording` on the gap-free grid with rebased timestamps, if it has
-          been preprocessed.
+          Each preprocessed source of `recording` on its gap-free grid with
+          rebased timestamps, one table per source, identified by
+          PreprocessedRecording.source.
       computations:
         range: DerivedDataset
         multivalued: true

@@ -41,14 +41,14 @@ def test_load_recording_from_hdf5():
     recording = load_recording(str(FIXTURE))
 
     # --- RecordingMetadata: read from the acceleration table's Start_Time attr ---
-    assert recording.recording_metadata.start_time == "2026-07-07T11:01:15.141594"
+    assert recording.sources["source1"].recording_metadata.start_time == "2026-07-07T11:01:15.141594"
 
     # --- HardwareMetadata: adc_reference_voltage attr, only channel1 is populated ---
-    assert recording.hardware_metadata.adc_reference_voltage == "3.3"
-    assert recording.hardware_metadata.channel2_metadata is None
-    assert recording.hardware_metadata.channel3_metadata is None
+    assert recording.sources["source1"].hardware_metadata.adc_reference_voltage == "3.3"
+    assert recording.sources["source1"].hardware_metadata.channel2_metadata is None
+    assert recording.sources["source1"].hardware_metadata.channel3_metadata is None
 
-    channel1_metadata = recording.hardware_metadata.channel1_metadata
+    channel1_metadata = recording.sources["source1"].hardware_metadata.channel1_metadata
     assert channel1_metadata is not None
 
     # --- Sensor: the single row in the sensors table ---
@@ -72,7 +72,7 @@ def test_load_recording_from_hdf5():
     assert compensations[0].order == 0
 
     # --- RecordingData: columnar arrays aligned by index, one row per sample ---
-    data = recording.recording_data
+    data = recording.sources["source1"].recording_data
     assert len(data.timestamp) == 48027
     assert len(data.counter) == 48027
     assert len(data.channel1) == 48027
@@ -122,15 +122,15 @@ def test_load_recording_v1_uses_declared_primary_table_name(tmp_path):
 
     recording = load_recording(str(v1_file))
 
-    assert recording.recording_metadata.start_time == "2026-02-02T00:00:00"
-    assert recording.hardware_metadata.adc_reference_voltage == "5.0"
-    assert recording.recording_data.channel1 == pytest.approx([512.0, 600.0])
+    assert recording.sources["source1"].recording_metadata.start_time == "2026-02-02T00:00:00"
+    assert recording.sources["source1"].hardware_metadata.adc_reference_voltage == "5.0"
+    assert recording.sources["source1"].recording_data.channel1 == pytest.approx([512.0, 600.0])
 
-    sensor = recording.hardware_metadata.channel1_metadata.sensor
+    sensor = recording.sources["source1"].hardware_metadata.channel1_metadata.sensor
     assert sensor.sensor_id == "volt_01"
     assert sensor.unit == "V"
 
-    compensations = recording.hardware_metadata.channel1_metadata.compensations
+    compensations = recording.sources["source1"].hardware_metadata.channel1_metadata.compensations
     assert len(compensations) == 1
     assert isinstance(compensations[0], LinearConversion)
     assert compensations[0].gain == pytest.approx(2.0)
@@ -155,17 +155,17 @@ def test_save_recording_round_trips_through_load_recording(tmp_path):
     save_recording(original, str(out_file))
     reloaded = load_recording(str(out_file))
 
-    assert reloaded.recording_metadata.start_time == original.recording_metadata.start_time
-    assert reloaded.hardware_metadata.adc_reference_voltage == original.hardware_metadata.adc_reference_voltage
-    assert reloaded.recording_data.counter == original.recording_data.counter
-    assert reloaded.recording_data.timestamp == original.recording_data.timestamp
-    assert reloaded.recording_data.channel1 == pytest.approx(original.recording_data.channel1)
+    assert reloaded.sources["source1"].recording_metadata.start_time == original.sources["source1"].recording_metadata.start_time
+    assert reloaded.sources["source1"].hardware_metadata.adc_reference_voltage == original.sources["source1"].hardware_metadata.adc_reference_voltage
+    assert reloaded.sources["source1"].recording_data.counter == original.sources["source1"].recording_data.counter
+    assert reloaded.sources["source1"].recording_data.timestamp == original.sources["source1"].recording_data.timestamp
+    assert reloaded.sources["source1"].recording_data.channel1 == pytest.approx(original.sources["source1"].recording_data.channel1)
 
-    sensor = reloaded.hardware_metadata.channel1_metadata.sensor
-    original_sensor = original.hardware_metadata.channel1_metadata.sensor
+    sensor = reloaded.sources["source1"].hardware_metadata.channel1_metadata.sensor
+    original_sensor = original.sources["source1"].hardware_metadata.channel1_metadata.sensor
     assert sensor.sensor_id == original_sensor.sensor_id
     assert sensor.unit == original_sensor.unit
-    assert isinstance(reloaded.hardware_metadata.channel1_metadata.compensations[0], NoConversion)
+    assert isinstance(reloaded.sources["source1"].hardware_metadata.channel1_metadata.compensations[0], NoConversion)
 
 
 def test_save_recording_round_trips_a_linear_conversion_channel(tmp_path):
@@ -177,11 +177,11 @@ def test_save_recording_round_trips_a_linear_conversion_channel(tmp_path):
     save_recording(original, str(out_file))
     reloaded = load_recording(str(out_file))
 
-    compensation = reloaded.hardware_metadata.channel1_metadata.compensations[0]
+    compensation = reloaded.sources["source1"].hardware_metadata.channel1_metadata.compensations[0]
     assert isinstance(compensation, LinearConversion)
     assert compensation.gain == pytest.approx(2.0)
     assert compensation.offset == pytest.approx(-10.0)
-    assert reloaded.recording_data.channel1 == pytest.approx([512.0, 600.0])
+    assert reloaded.sources["source1"].recording_data.channel1 == pytest.approx([512.0, 600.0])
 
 
 # ── write/read: DatasetBundle / DerivedDataset ──────────────────────────────
@@ -303,12 +303,12 @@ def test_load_recording_without_sensor_rows_gets_an_unspecified_sensor(tmp_path,
 
     recording = load_recording(str(path))
 
-    assert recording.recording_data.channel1 == pytest.approx([1.5, 2.5, 3.5])
-    assert recording.recording_data.channel2 == pytest.approx([2.5, 3.5, 4.5])
-    for metadata in (recording.hardware_metadata.channel1_metadata, recording.hardware_metadata.channel2_metadata):
+    assert recording.sources["source1"].recording_data.channel1 == pytest.approx([1.5, 2.5, 3.5])
+    assert recording.sources["source1"].recording_data.channel2 == pytest.approx([2.5, 3.5, 4.5])
+    for metadata in (recording.sources["source1"].hardware_metadata.channel1_metadata, recording.sources["source1"].hardware_metadata.channel2_metadata):
         assert all(getattr(metadata.sensor, field) is None for field in vars(metadata.sensor) if not field.startswith("_"))
         assert len(metadata.compensations) == 1 and isinstance(metadata.compensations[0], NoConversion)
-    assert recording.hardware_metadata.channel3_metadata is None
+    assert recording.sources["source1"].hardware_metadata.channel3_metadata is None
 
 
 def test_load_recording_without_sensor_rows_rejects_an_unconverted_table(tmp_path):
@@ -341,8 +341,8 @@ def test_a_recording_without_sensor_rows_is_written_back_without_them(tmp_path, 
     with h5py.File(out, "r") as f:
         assert "sensors" not in f  # no rows of empty strings and zeros made up
     reloaded = load_recording(str(out))
-    assert reloaded.recording_data.channel1 == pytest.approx(original.recording_data.channel1)
-    assert reloaded.hardware_metadata.channel1_metadata.sensor == original.hardware_metadata.channel1_metadata.sensor
+    assert reloaded.sources["source1"].recording_data.channel1 == pytest.approx(original.sources["source1"].recording_data.channel1)
+    assert reloaded.sources["source1"].hardware_metadata.channel1_metadata.sensor == original.sources["source1"].hardware_metadata.channel1_metadata.sensor
 
 
 def test_a_dataset_bundle_without_sensor_rows_loads(tmp_path):
@@ -351,10 +351,10 @@ def test_a_dataset_bundle_without_sensor_rows_loads(tmp_path):
 
     bundle = load_dataset_bundle(str(path))
 
-    assert bundle.recording.recording_data.channel1 == pytest.approx([1.5, 2.5, 3.5])
+    assert bundle.recording.sources["source1"].recording_data.channel1 == pytest.approx([1.5, 2.5, 3.5])
     out = tmp_path / "bundle.hdf5"
     save_dataset_bundle(bundle, str(out))
-    assert load_dataset_bundle(str(out)).recording.recording_data.counter == [0, 1, 2]
+    assert load_dataset_bundle(str(out)).recording.sources["source1"].recording_data.counter == [0, 1, 2]
 
 
 # ── first-generation files: no sensors, no `conversion`, no `adc_reference_voltage` ──
@@ -382,15 +382,15 @@ def test_load_recording_reads_a_first_generation_file(tmp_path, caplog):
     with caplog.at_level("WARNING", logger="icoschema.storage.python.hdf5"):
         recording = load_recording(str(path))
 
-    assert recording.recording_data.channel1 == pytest.approx([-1.5, 0.5, 99.0])
-    assert recording.recording_data.channel2 == pytest.approx([-0.5, 1.5, 98.0])
-    assert recording.recording_metadata.start_time == "2024-10-29T14:41:29.529375"
-    assert recording.hardware_metadata.adc_reference_voltage is None
-    for metadata in (recording.hardware_metadata.channel1_metadata, recording.hardware_metadata.channel2_metadata):
+    assert recording.sources["source1"].recording_data.channel1 == pytest.approx([-1.5, 0.5, 99.0])
+    assert recording.sources["source1"].recording_data.channel2 == pytest.approx([-0.5, 1.5, 98.0])
+    assert recording.sources["source1"].recording_metadata.start_time == "2024-10-29T14:41:29.529375"
+    assert recording.sources["source1"].hardware_metadata.adc_reference_voltage is None
+    for metadata in (recording.sources["source1"].hardware_metadata.channel1_metadata, recording.sources["source1"].hardware_metadata.channel2_metadata):
         assert (metadata.sensor.unit, metadata.sensor.phys_min, metadata.sensor.phys_max) == ("g", -100.0, 100.0)
         assert metadata.sensor.sensor_id is None
         assert len(metadata.compensations) == 1 and isinstance(metadata.compensations[0], NoConversion)
-    assert recording.hardware_metadata.channel1_metadata.sensor is not recording.hardware_metadata.channel2_metadata.sensor
+    assert recording.sources["source1"].hardware_metadata.channel1_metadata.sensor is not recording.sources["source1"].hardware_metadata.channel2_metadata.sensor
     assert "Sensor_Range" not in caplog.text  # understood, not dropped
 
 
@@ -402,7 +402,7 @@ def test_a_first_generation_file_without_a_readable_range_gets_an_unspecified_se
     with caplog.at_level("WARNING", logger="icoschema.storage.python.hdf5"):
         recording = load_recording(str(path))
 
-    sensor = recording.hardware_metadata.channel1_metadata.sensor
+    sensor = recording.sources["source1"].hardware_metadata.channel1_metadata.sensor
     assert sensor.unit is None and sensor.phys_max is None
     assert ("Sensor_Range" in caplog.text) == (sensor_range is not None)  # an unreadable one is reported as dropped
 
@@ -416,8 +416,8 @@ def test_a_first_generation_file_round_trips_through_the_current_format(tmp_path
     save_recording(original, str(out))
     reloaded = load_recording(str(out))
 
-    assert reloaded.recording_data.channel1 == pytest.approx(original.recording_data.channel1)
-    sensor = reloaded.hardware_metadata.channel1_metadata.sensor
+    assert reloaded.sources["source1"].recording_data.channel1 == pytest.approx(original.sources["source1"].recording_data.channel1)
+    sensor = reloaded.sources["source1"].hardware_metadata.channel1_metadata.sensor
     assert (sensor.unit, sensor.phys_min, sensor.phys_max) == ("g", -100.0, 100.0)  # the range survives
 
 
@@ -436,7 +436,7 @@ def test_a_first_generation_sensor_range_stored_as_bytes_is_read(tmp_path):
     path = tmp_path / "bytes_range.hdf5"
     _write_first_generation_file(path, sensor_range="± 200 g₀".encode())
 
-    sensor = load_recording(str(path)).hardware_metadata.channel1_metadata.sensor
+    sensor = load_recording(str(path)).sources["source1"].hardware_metadata.channel1_metadata.sensor
 
     assert (sensor.unit, sensor.phys_min, sensor.phys_max) == ("g", -200.0, 200.0)
 
@@ -455,8 +455,8 @@ def test_sensors_table_without_a_dimension_column_loads_with_dimension_unset(tmp
 
     recording = load_recording(str(path))
 
-    sensor = recording.hardware_metadata.channel1_metadata.sensor
+    sensor = recording.sources["source1"].hardware_metadata.channel1_metadata.sensor
     assert sensor.dimension is None
     assert (sensor.sensor_id, sensor.unit, sensor.phys_min, sensor.phys_max) == ("acc40g_x", "g", -40.0, 40.0)
-    conversion = recording.hardware_metadata.channel1_metadata.compensations[0]
+    conversion = recording.sources["source1"].hardware_metadata.channel1_metadata.compensations[0]
     assert isinstance(conversion, LinearConversion) and (conversion.gain, conversion.offset) == (2.0, -1.0)
