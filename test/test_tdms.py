@@ -9,10 +9,10 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
+from tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
 
 from icoschema import DatasetBundle, Recording
 from icoschema.storage.python import tdms as tdms_storage
-from test.tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
 
 INCREMENT = 0.00010499790004199917
 START = datetime.datetime(2025, 4, 17, 14, 8, 29, 342295)
