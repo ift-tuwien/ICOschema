@@ -6,7 +6,7 @@ Backend-agnostic data model for sensor/hardware recordings and their derived com
 
 ```sh
 uv venv --allow-existing
-uv sync --all-extras
+uv sync
 ```
 
 ## Usage
@@ -40,7 +40,7 @@ bundle.to_hdf5("some_file.hdf5")
 
 ### TDMS files (read-only)
 
-`DatasetBundle.from_tdms(path)` / `Recording.from_tdms(path)` read an NI TDMS file (`pip install icoschema[tdms]`), and
+`DatasetBundle.from_tdms(path)` / `Recording.from_tdms(path)` read an NI TDMS file, and
 `DatasetBundle.from_file(path)` takes either format, told apart by the file's first bytes. Like HDF5, reading dispatches
 on a format version, here the root property `icoschema_format_version`; a file without one is read with the *legacy*
 layout (`rawdata` group, `signalQuality` channels, one source per STU group), documented in

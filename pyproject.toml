@@ -1,6 +1,6 @@
 [project]
 name = "icoschema"
-version = "0.3.0"
+version = "0.3.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -9,13 +9,11 @@ dependencies = [
   "linkml>=1.11.1",
   "numpy>=2.5.1",
   "pandas>=3.0.3",
+  "tdmspy>=0.1.0",
 ]
 
-[project.optional-dependencies]
-tdms = ["nptdms>=1.10"]  # reading .tdms files (DatasetBundle.from_tdms)
-
 [dependency-groups]
-dev = ["nptdms>=1.10", "pandas-stubs>=3.0.3.260530", "pytest>=9.1.1", "ruff>=0.16.7"]
+dev = ["pandas-stubs>=3.0.3.260530", "pytest>=9.1.1", "ruff>=0.16.7"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

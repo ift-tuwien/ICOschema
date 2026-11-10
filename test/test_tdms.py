@@ -9,7 +9,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-from nptdms import ChannelObject, GroupObject, RootObject, TdmsWriter
+from tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
 
 from icoschema import DatasetBundle, Recording
 from icoschema.storage.python import tdms as tdms_storage
@@ -82,7 +82,7 @@ def test_single_stu_with_system_quality(tmp_path: Path) -> None:
     assert [type(c).__name__ for c in source.hardware_metadata.channel1_metadata.compensations] == ["NoConversion"]
 
 
-def test_scaled_channels_are_stored_as_scaled_by_nptdms(tmp_path: Path) -> None:
+def test_scaled_channels_are_stored_as_scaled_by_the_reader(tmp_path: Path) -> None:
     scaling = {
         "NI_Number_Of_Scales": 1,
         "NI_Scale[0]_Scale_Type": "Linear",
