@@ -9,7 +9,7 @@ set windows-shell := ["pwsh.exe", "-NoLogo", "-Command"]
 [group('setup')]
 setup:
 	uv venv --allow-existing
-	uv sync --all-extras
+	uv sync
 
 # Check code with various linters
 [group('lint')]

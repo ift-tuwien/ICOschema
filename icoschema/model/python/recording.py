@@ -96,8 +96,7 @@ class Recording(generated.Recording):
 
     @classmethod
     def from_tdms(cls, path: str) -> Recording:
-        """Load a Recording from an NI TDMS file (read-only; needs the `tdms`
-        extra). See ICOschema.storage.python.tdms for the accepted layouts and
+        """Load a Recording from an NI TDMS file (read-only). See ICOschema.storage.python.tdms for the accepted layouts and
         the legacy/versioned format dispatch."""
         from icoschema.storage.python import tdms
 

@@ -13,7 +13,7 @@ property `icoschema_format_version` of the TDMS file:
 **Legacy layout.** The deliberately simple mapping:
 
 - The `rawdata` group's channels (1 to 3, file order) become `channel1..3`,
-  values as nptdms returns them (scaled by the channel's NI scaling, if it
+  values as `tdmspy` reads them (scaled by the channel's NI scaling, if it
   has one, so they are already in `unit_string`; hence `NoConversion`; the
   original scaling stays in `additional_data`). Channels of one source must
   have the same length (an error otherwise: nothing is cut).
@@ -44,7 +44,7 @@ property `icoschema_format_version` of the TDMS file:
   keeps: `file` (root), `group` (the source's `system` or STU group),
   `channels` (by name) and `other_groups` (e.g. `info`).
 
-TDMS is read-only: there is no writer. Needs `nptdms` (the `tdms` extra).
+TDMS is read-only: there is no writer. Uses `tdmspy`.
 
 This module is an internal implementation detail. Don't import it directly
 -- use ICOschema.model.python.recording.Recording.from_tdms() and
@@ -60,6 +60,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import tdmspy
 
 from icoschema.schema.generated.python import dataset as generated
 
@@ -76,6 +77,8 @@ _DEFAULT_SOURCE_NAME = "source1"
 
 def _jsonable(value: Any) -> Any:
     """`value` as something `json.dumps` accepts (timestamps as ISO text)."""
+    if hasattr(value, "to_datetime64"):  # an tdmspy Timestamp
+        return str(np.datetime_as_string(value.to_datetime64("us"), unit="us"))
     if isinstance(value, np.datetime64):
         return str(np.datetime_as_string(value, unit="us"))
     if isinstance(value, datetime.datetime | datetime.date):
@@ -103,7 +106,7 @@ def _quality(channel: Any) -> generated.QualityChannel | None:
     """The `signalQuality` channel as a `QualityChannel`, `None` if it holds
     no numeric data (e.g. the empty void-typed channel some files have)."""
     try:
-        data = np.asarray(channel[:])
+        data = np.asarray(channel.read())
     except Exception:  # noqa: BLE001 -- unreadable -> unknown
         return None
     if data.size == 0 or not np.issubdtype(data.dtype, np.number) or not np.isfinite(data.astype(np.float64)).any():
@@ -126,7 +129,7 @@ def _worst(candidates: list[generated.QualityChannel | None]) -> generated.Quali
 def _file_quality(tdms: Any, raw_count: int) -> tuple[generated.QualityChannel | None, Any | None]:
     """`(quality, group it came from)` of a single-source file: the `system`
     group's, else the worst of the other groups' (one per raw channel)."""
-    groups = {group.name: group for group in tdms.groups()}
+    groups = {group.name: group for group in tdms.groups}
     system = groups.get(SYSTEM_GROUP)
     if system is not None and QUALITY_CHANNEL in system:
         return _quality(system[QUALITY_CHANNEL]), system
@@ -146,7 +149,7 @@ def _file_quality(tdms: Any, raw_count: int) -> tuple[generated.QualityChannel |
 def _split_by_stu(tdms: Any, channels: list[Any]) -> dict[str, list[Any]] | None:
     """`{group name: its rawdata channels}` (in file order) if the file holds
     several STUs (see the module docstring), else `None`."""
-    groups = list(tdms.groups())
+    groups = list(tdms.groups)
     system = next((g for g in groups if g.name == SYSTEM_GROUP), None)
     if system is not None and QUALITY_CHANNEL in system:
         return None
@@ -187,7 +190,7 @@ def _read_channels(path: str, where: str, channels: list[Any]) -> _Read:
         raise ValueError(f"{path}: {where!r} channels have different wf_increment values {increments}")
     fs = 1.0 / increments[0]
 
-    data = [np.asarray(channel[:]) for channel in channels]
+    data = [np.asarray(channel.read()) for channel in channels]
     lengths = [len(values) for values in data]
     if len(set(lengths)) != 1:
         raise ValueError(f"{path}: {where!r} channels have different lengths {lengths}")
@@ -199,7 +202,7 @@ def _read_channels(path: str, where: str, channels: list[Any]) -> _Read:
     start = channels[0].properties.get("wf_start_time")
     start_time = None
     if start is not None:
-        begin = np.datetime64(start, "us")
+        begin = start.to_datetime64("us") if hasattr(start, "to_datetime64") else np.datetime64(start, "us")
         offset = channels[0].properties.get("wf_start_offset")
         if offset is not None and float(offset) != 0.0:
             begin = begin + np.timedelta64(round(float(offset) * 1e6), "us")
@@ -257,13 +260,13 @@ def _additional_data(tdms: Any, own_group: Any | None, channels: list[Any], data
         "file": _properties(tdms),
         "group": _properties(own_group) if own_group is not None else None,
         "channels": {channel.name: _properties(channel) for channel in channels},
-        "other_groups": {g.name: _properties(g) for g in tdms.groups() if g.name not in data_groups},
+        "other_groups": {g.name: _properties(g) for g in tdms.groups if g.name not in data_groups},
     }
 
 
 def _load_stus(path: str, tdms: Any, members: dict[str, list[Any]]) -> generated.Recording:
     """One `Source` per STU group (see the module docstring)."""
-    groups = {g.name: g for g in tdms.groups()}
+    groups = {g.name: g for g in tdms.groups}
     data_groups = {RAW_GROUP, *members}
     sources = []
     taken: set[str] = set()
@@ -284,9 +287,9 @@ def _load_stus(path: str, tdms: Any, members: dict[str, list[Any]]) -> generated
 
 
 def _load_recording_legacy(path: str, tdms: Any) -> generated.Recording:
-    if RAW_GROUP not in [g.name for g in tdms.groups()]:
-        raise ValueError(f"{path}: no {RAW_GROUP!r} group (found {[g.name for g in tdms.groups()]})")
-    channels = list(tdms[RAW_GROUP].channels())
+    if RAW_GROUP not in [g.name for g in tdms.groups]:
+        raise ValueError(f"{path}: no {RAW_GROUP!r} group (found {[g.name for g in tdms.groups]})")
+    channels = list(tdms[RAW_GROUP].channels)
     if not channels:
         raise ValueError(f"{path}: group {RAW_GROUP!r} has no channels")
 
@@ -332,13 +335,11 @@ def load(path: str) -> tuple[generated.Recording, str]:
     """The recording in the TDMS file at `path` and the format version it was
     read as (`LEGACY_VERSION` for a file without one). Raises `ValueError` for
     a file without a usable `rawdata` group or with an unknown format
-    version, and `ImportError` if `nptdms` isn't installed."""
+    version."""
     try:
-        from nptdms import TdmsFile  # type: ignore[import-untyped]
-    except ImportError as error:
-        raise ImportError("reading TDMS files needs nptdms: pip install icoschema[tdms]") from error
-
-    tdms = TdmsFile.read(path)
+        tdms = tdmspy.read(path)
+    except tdmspy.TdmsFormatError as error:
+        raise ValueError(f"{path}: {error}") from error
     version = _format_version(tdms, path)
     if version is None:
         return _load_recording_legacy(path, tdms), LEGACY_VERSION

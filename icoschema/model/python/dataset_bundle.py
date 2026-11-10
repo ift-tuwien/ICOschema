@@ -127,8 +127,7 @@ class DatasetBundle(generated.DatasetBundle):
     def from_tdms(cls, path: str) -> DatasetBundle:
         """Load a DatasetBundle (just the recording) from an NI TDMS file.
 
-        TDMS is read-only: save results with `to_hdf5`. Needs the `tdms`
-        extra. See ICOschema.storage.python.tdms for the accepted layouts.
+        TDMS is read-only: save results with `to_hdf5`. See ICOschema.storage.python.tdms for the accepted layouts.
         """
         from icoschema._version import software_id
         from icoschema.storage.python import tdms
