@@ -38,6 +38,22 @@ bundle = bundle.with_computation("wavelet_coefficients/channel1/details", derive
 bundle.to_hdf5("some_file.hdf5")
 ```
 
+### Schema and file format versions
+
+`from icoschema import ...` gives the latest schema version. To stay on one, import from its namespace; it has the
+whole API (`Recording`, `Source`, `DatasetBundle`, `Sensor`, ... all as typed dataclasses):
+
+```python
+from icoschema import v1
+
+bundle = v1.DatasetBundle.from_hdf5("some_file.hdf5")
+bundle.to_hdf5("out.hdf5")                          # the oldest file format version that can hold the bundle
+bundle.to_hdf5("out.hdf5", format_version="1.2")    # a chosen one; ValueError if it can't hold the bundle
+v1.hdf5_format_versions(writable=True)              # ("1.0", "1.1", "1.2", "1.3", "1.4")
+```
+
+The schema version decides which classes you work with; the file format version is only how they are stored.
+
 ### TDMS files (read-only)
 
 `DatasetBundle.from_tdms(path)` / `Recording.from_tdms(path)` read an NI TDMS file, and

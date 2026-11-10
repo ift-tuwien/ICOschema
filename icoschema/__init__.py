@@ -11,28 +11,25 @@ and their derived computations.
     bundle.to_hdf5("some_file.hdf5")                          # the oldest file format version that fits
     bundle.to_hdf5("some_file.hdf5", format_version="1.2")    # or a chosen one (see hdf5_format_versions())
 
+These names are those of the latest schema version, today `icoschema.v1`. To stay on a schema version, import
+from it (`from icoschema import v1`; `v1.Recording`, `v1.Source`, `v1.Sensor`, ...): it has the complete API.
+
 See ICOschema.model.python.recording.Recording and
 ICOschema.model.python.dataset_bundle.DatasetBundle for the full API.
 `DerivedDataset` is a component type with no behavior beyond what's
 generated (see ICOschema.schema.generated.python.dataset.DerivedDataset).
 """
 
-from icoschema.model.python.dataset_bundle import DatasetBundle
-from icoschema.model.python.preprocessed_recording import PreprocessedRecording
-from icoschema.model.python.recording import Recording
-from icoschema.schema.generated.python.dataset import ComputationStep, DerivedDataset
-from icoschema.storage.python.hdf5 import (
+from icoschema import v1
+from icoschema.v1 import (
+    ComputationStep,
+    DatasetBundle,
+    DerivedDataset,
     FormatVersion,
-    readable_versions,
-    writable_versions,
+    PreprocessedRecording,
+    Recording,
+    hdf5_format_versions,
 )
-
-
-def hdf5_format_versions(*, writable: bool = False) -> tuple[str, ...]:
-    """The HDF5 file format versions this package reads ("legacy" is the unversioned layout), or with
-    `writable=True` the ones `to_hdf5(format_version=...)` can write."""
-    return writable_versions() if writable else readable_versions()
-
 
 __all__ = [
     "ComputationStep",
@@ -42,4 +39,5 @@ __all__ = [
     "PreprocessedRecording",
     "Recording",
     "hdf5_format_versions",
+    "v1",
 ]
