@@ -32,7 +32,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from icoschema.schema.generated.python import dataset as generated
+from ..schema.generated import dataset as generated
 
 # The ADC's clock in Hz and its default (prescaler, acquisition time,
 # oversample rate) settings, which nearly every recording uses. With them,
@@ -58,7 +58,7 @@ def _lost_packets(counter: np.ndarray) -> np.ndarray:
 class Source(generated.Source):
     """One acquisition source (STU/STH combination) of a `Recording`.
 
-    Has every field of `ICOschema.schema.generated.python.dataset.Source`
+    Has every field of `icoschema.v1.schema.generated.dataset.Source`
     (`name`, `stu_id`, `sth_id`, `sampling_frequency`, `quality`,
     `additional_data`, `hardware_metadata`, `recording_metadata`,
     `recording_data`), plus the getters and calculations below.

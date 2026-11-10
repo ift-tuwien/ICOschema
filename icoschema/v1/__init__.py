@@ -7,20 +7,20 @@
     bundle.to_hdf5("some_file.hdf5", format_version="1.2")
 
 Pin the schema version by importing it from here rather than from the top-level `icoschema`, which is an
-alias of the latest schema version (today this one). A future schema version gets its own module next to this
-one with the same layout, so that code importing `icoschema.v1` keeps the classes, and the type checking, it
-was written against.
+alias of the latest schema version. A newer schema version is a package of its own next to this one, with the
+same layout, so code importing `icoschema.v1` keeps the classes, and the type checking, it was written against.
 
-Everything here is the object defined elsewhere in the package, not a copy: `icoschema.Recording is
-icoschema.v1.Recording`. The file format versions (`hdf5_format_versions()`, `FormatVersion`) are those of
-the HDF5 layouts this schema version can be stored in.
+This package is self-contained: everything in it imports from the rest of the package only relatively (the one
+exception is the version-neutral `icoschema._version`), so that the next schema version starts as a copy of it.
+The names here are the objects defined in its submodules, not copies. The file format versions
+(`hdf5_format_versions()`, `FormatVersion`) are those of the HDF5 layouts this schema version can be stored in.
 """
 
-from icoschema.model.python.dataset_bundle import DatasetBundle
-from icoschema.model.python.preprocessed_recording import PreprocessedRecording
-from icoschema.model.python.recording import Recording
-from icoschema.model.python.source import Source
-from icoschema.schema.generated.python.dataset import (
+from .model.dataset_bundle import DatasetBundle
+from .model.preprocessed_recording import PreprocessedRecording
+from .model.recording import Recording
+from .model.source import Source
+from .schema.generated.dataset import (
     ChannelMetadata,
     Compensation,
     ComputationStatus,
@@ -39,7 +39,7 @@ from icoschema.schema.generated.python.dataset import (
     SamplingFrequencySource,
     Sensor,
 )
-from icoschema.storage.python.hdf5 import (
+from .storage.hdf5 import (
     FormatVersion,
     readable_versions,
     writable_versions,

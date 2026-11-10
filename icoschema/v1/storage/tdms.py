@@ -1,5 +1,5 @@
 """Adapter that reads NI TDMS files (read-only) into the generated `dataset`
-schema classes (see ICOschema/schema/generated/python/dataset.py).
+schema classes (see icoschema/v1/schema/generated/dataset.py).
 
 Like the HDF5 adapter, read dispatches on a format version, here the root
 property `icoschema_format_version` of the TDMS file:
@@ -47,8 +47,8 @@ property `icoschema_format_version` of the TDMS file:
 TDMS is read-only: there is no writer. Uses `tdmspy`.
 
 This module is an internal implementation detail. Don't import it directly
--- use ICOschema.model.python.recording.Recording.from_tdms() and
-ICOschema.model.python.dataset_bundle.DatasetBundle.from_tdms() instead.
+-- use icoschema.v1.model.recording.Recording.from_tdms() and
+icoschema.v1.model.dataset_bundle.DatasetBundle.from_tdms() instead.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ from typing import Any
 import numpy as np
 import tdmspy
 
-from icoschema.schema.generated.python import dataset as generated
+from ..schema.generated import dataset as generated
 
 FORMAT_VERSION_PROPERTY = "icoschema_format_version"
 LEGACY_VERSION = "legacy"

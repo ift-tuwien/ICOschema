@@ -8,7 +8,7 @@ from pathlib import Path
 import h5py
 import pytest
 
-from icoschema import ComputationStep, DatasetBundle, DerivedDataset
+from icoschema.v1 import ComputationStep, DatasetBundle, DerivedDataset
 
 FIXTURE = Path(__file__).resolve().parent / "test_with_sensors.hdf5"
 
@@ -186,7 +186,7 @@ def test_a_step_whose_computation_was_skipped_is_dropped_too(tmp_path):
 
 
 def test_steps_and_a_preprocessed_table_together(tmp_path):
-    from test_preprocessed import _preprocess
+    from .test_preprocessed import _preprocess
 
     bundle = _bundle_with_two_steps()
     bundle = bundle.with_preprocessed(_preprocess(bundle.recording))

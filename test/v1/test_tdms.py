@@ -9,10 +9,11 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-from tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
 
-from icoschema import DatasetBundle, Recording
-from icoschema.storage.python import tdms as tdms_storage
+from icoschema.v1 import DatasetBundle, Recording
+from icoschema.v1.storage import tdms as tdms_storage
+
+from .tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
 
 INCREMENT = 0.00010499790004199917
 START = datetime.datetime(2025, 4, 17, 14, 8, 29, 342295)
@@ -299,8 +300,8 @@ def test_from_file_tells_hdf5_and_tdms_apart_by_content(tmp_path: Path) -> None:
 
 
 def test_files_saved_with_the_old_tdms_json_still_report_rate_and_loss() -> None:
-    from icoschema.model.python.recording import Source
-    from icoschema.schema.generated.python import dataset as generated
+    from icoschema.v1.model.recording import Source
+    from icoschema.v1.schema.generated import dataset as generated
 
     legacy = json.dumps({"tdms": {"sampling_frequency": 5000.0, "signal_loss_percentage": 2.5, "signal_loss_measured": True}})
     source = Source(

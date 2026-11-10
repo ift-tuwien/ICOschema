@@ -24,14 +24,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from icoschema.schema.generated.python import dataset as generated
+from ..schema.generated import dataset as generated
 
 
 class PreprocessedRecording(generated.PreprocessedRecording):
     """A recording's channels on the gap-free grid with rebased timestamps.
 
     Has every field of
-    `ICOschema.schema.generated.python.dataset.PreprocessedRecording`, plus
+    `icoschema.v1.schema.generated.dataset.PreprocessedRecording`, plus
     the getters below. Row `j` is grid position `j` of the raw recording
     (see `Recording.sample_index()`).
     """

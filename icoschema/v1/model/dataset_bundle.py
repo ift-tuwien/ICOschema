@@ -23,7 +23,7 @@ by the constructor; with several sources use `preprocessed_for(source)` and
 `DerivedDataset` itself has no model-layer wrapper -- like `Sensor` or
 `ChannelMetadata`, it's a component type with no behavior beyond what's
 generated, used directly via
-`ICOschema.schema.generated.python.dataset.DerivedDataset`.
+`icoschema.v1.schema.generated.dataset.DerivedDataset`.
 """
 
 from __future__ import annotations
@@ -33,14 +33,14 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from icoschema.model.python.preprocessed_recording import PreprocessedRecording
-from icoschema.model.python.recording import Recording
-from icoschema.model.python.source import Source
-from icoschema.schema.generated.python import dataset as generated
-from icoschema.schema.generated.python.dataset import ComputationStep, DerivedDataset
+from ..schema.generated import dataset as generated
+from ..schema.generated.dataset import ComputationStep, DerivedDataset
+from .preprocessed_recording import PreprocessedRecording
+from .recording import Recording
+from .source import Source
 
 if TYPE_CHECKING:
-    from icoschema.storage.python.hdf5 import FormatVersion
+    from ..storage.hdf5 import FormatVersion
 
 _CHANNELS = ("channel1", "channel2", "channel3")
 
@@ -57,7 +57,7 @@ class DatasetBundle(generated.DatasetBundle):
     """A Recording, its optional PreprocessedRecordings, every DerivedDataset
     computed from them, and the ComputationSteps that produced those.
 
-    Has every field of `ICOschema.schema.generated.python.dataset.DatasetBundle`
+    Has every field of `icoschema.v1.schema.generated.dataset.DatasetBundle`
     (`recording`, `preprocessed_tables`, `computations`, `steps`), plus the
     loading/writing and immutable-update methods defined below. Construct via
     a `from_XXX` classmethod (e.g. `from_hdf5`) rather than the bare
@@ -111,9 +111,9 @@ class DatasetBundle(generated.DatasetBundle):
         preprocessed table that doesn't fit its source always raises
         `ValueError` (see `with_preprocessed`), whatever `on_error` says --
         it's primary data, not an optional extra. See
-        ICOschema.storage.python.hdf5 for the accepted file layout.
+        icoschema.v1.storage.hdf5 for the accepted file layout.
         """
-        from icoschema.storage.python import hdf5
+        from ..storage import hdf5
 
         loaded = hdf5.load_dataset_bundle(path, on_error=on_error)
         bundle = cls(
@@ -130,10 +130,11 @@ class DatasetBundle(generated.DatasetBundle):
     def from_tdms(cls, path: str) -> DatasetBundle:
         """Load a DatasetBundle (just the recording) from an NI TDMS file.
 
-        TDMS is read-only: save results with `to_hdf5`. See ICOschema.storage.python.tdms for the accepted layouts.
+        TDMS is read-only: save results with `to_hdf5`. See icoschema.v1.storage.tdms for the accepted layouts.
         """
         from icoschema._version import software_id
-        from icoschema.storage.python import tdms
+
+        from ..storage import tdms
 
         recording, version = tdms.load(path)
         return cls(
@@ -163,12 +164,12 @@ class DatasetBundle(generated.DatasetBundle):
         bundle (so files stay readable by older readers). Raises `ValueError`, before writing anything, if
         the version is unknown or can't hold the bundle (e.g. steps in "1.1"). See `hdf5_format_versions()`.
 
-        See ICOschema.storage.python.hdf5 for the file layout this
+        See icoschema.v1.storage.hdf5 for the file layout this
         produces -- each computation is stored in its true N-D shape under
         a `/computations/` group. Raises `ValueError` if a preprocessed
         table doesn't fit its source (see `with_preprocessed`).
         """
-        from icoschema.storage.python import hdf5
+        from ..storage import hdf5
 
         recording = _as_model_recording(self.recording)
         for table in self._tables():

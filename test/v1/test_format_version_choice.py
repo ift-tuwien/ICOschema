@@ -1,5 +1,5 @@
 """Choosing the HDF5 file format version when writing (`to_hdf5(format_version=...)`), against the stored
-synthetic files in `test/data/`: each file is written in every writable version and either comes back with the
+synthetic files in `test/v1/data/`: each file is written in every writable version and either comes back with the
 same content or is refused, naming what the version can't hold."""
 
 import typing
@@ -7,13 +7,14 @@ from pathlib import Path
 
 import h5py
 import pytest
-from synthetic_files import CHANNEL_COUNTS, DATA_DIR, hdf5_name, tdms_name
 
-import icoschema
-from icoschema import DatasetBundle, Recording
-from icoschema.storage.python import hdf5 as hdf5_storage
+from icoschema import v1
+from icoschema.v1 import DatasetBundle, Recording
+from icoschema.v1.storage import hdf5 as hdf5_storage
 
-WRITABLE = icoschema.hdf5_format_versions(writable=True)
+from .synthetic_files import CHANNEL_COUNTS, DATA_DIR, hdf5_name, tdms_name
+
+WRITABLE = v1.hdf5_format_versions(writable=True)
 
 
 def as_tuple(version: str) -> tuple[int, ...]:
@@ -72,7 +73,7 @@ def test_the_typed_versions_are_the_writable_ones() -> None:
 
 
 def test_the_readable_versions_add_the_legacy_layout() -> None:
-    assert icoschema.hdf5_format_versions() == ("legacy", *WRITABLE)
+    assert v1.hdf5_format_versions() == ("legacy", *WRITABLE)
 
 
 # ── writing each file in each version ────────────────────────────────────────

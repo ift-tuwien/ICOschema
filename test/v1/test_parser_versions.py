@@ -1,4 +1,4 @@
-"""Every parser version against the stored synthetic files in `test/data/` (10 seconds of sine waves, 1 and 3
+"""Every parser version against the stored synthetic files in `test/v1/data/` (10 seconds of sine waves, 1 and 3
 channels, and two-source files wherever the format supports several sources). See `synthetic_files.py` for how
 the files are made and how to rewrite them.
 
@@ -11,7 +11,12 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-from synthetic_files import (
+
+from icoschema.v1 import DatasetBundle
+from icoschema.v1.storage import hdf5 as hdf5_storage
+from icoschema.v1.storage import tdms as tdms_storage
+
+from .synthetic_files import (
     CHANNEL_COUNTS,
     COUNTERS,
     DATA_DIR,
@@ -32,11 +37,7 @@ from synthetic_files import (
     tdms_name,
     write_all,
 )
-from tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
-
-from icoschema import DatasetBundle
-from icoschema.storage.python import hdf5 as hdf5_storage
-from icoschema.storage.python import tdms as tdms_storage
+from .tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
 
 HDF5_CASES = [(version, multi, channels) for (version, multi) in HDF5_WRITERS for channels in CHANNEL_COUNTS]
 HDF5_IDS = [hdf5_name(*case) for case in HDF5_CASES]
@@ -44,7 +45,7 @@ HDF5_IDS = [hdf5_name(*case) for case in HDF5_CASES]
 
 def stored(name: str) -> str:
     path = DATA_DIR / name
-    assert path.exists(), f"{path} is missing; regenerate with `uv run python test/synthetic_files.py`"
+    assert path.exists(), f"{path} is missing; regenerate with `cd test && uv run python -m v1.synthetic_files`"
     return str(path)
 
 

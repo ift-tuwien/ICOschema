@@ -9,11 +9,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from hdf5_helpers import write_v1_file
 
-from icoschema.model.python.dataset_bundle import DatasetBundle
-from icoschema.model.python.recording import Recording
-from icoschema.schema.generated.python import dataset as generated
+from icoschema.v1.model.dataset_bundle import DatasetBundle
+from icoschema.v1.model.recording import Recording
+from icoschema.v1.schema.generated import dataset as generated
+
+from .hdf5_helpers import write_v1_file
 
 FIXTURE = Path(__file__).resolve().parent / "test_with_sensors.hdf5"
 
@@ -228,7 +229,8 @@ def test_dataset_bundle_with_recording_replaces_recording_only():
 
 def test_recording_without_sensor_rows_loads_through_the_public_api(tmp_path):
     import h5py
-    from hdf5_helpers import SENSOR_DTYPE
+
+    from .hdf5_helpers import SENSOR_DTYPE
 
     path = tmp_path / "old.hdf5"
     with h5py.File(path, "w") as f:

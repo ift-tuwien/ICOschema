@@ -1,5 +1,5 @@
 """Adapter that reads/writes PyTables-style HDF5 files for the generated
-`dataset` schema classes (see ICOschema/schema/generated/python/dataset.py).
+`dataset` schema classes (see icoschema/v1/schema/generated/dataset.py).
 
 Read dispatches on the root-level `icoschema_format_version` attribute:
 
@@ -78,8 +78,8 @@ plain list only exists at the schema/Python level (see dataset.yaml).
 dataset attributes.
 
 This module is an internal implementation detail. Don't import it directly
--- use ICOschema.model.python.recording.Recording.from_hdf5()/.to_hdf5() and
-ICOschema.model.python.dataset_bundle.DatasetBundle.from_hdf5()/.to_hdf5()
+-- use icoschema.v1.model.recording.Recording.from_hdf5()/.to_hdf5() and
+icoschema.v1.model.dataset_bundle.DatasetBundle.from_hdf5()/.to_hdf5()
 instead.
 """
 
@@ -96,7 +96,8 @@ import h5py
 import numpy as np
 
 from icoschema._version import software_id
-from icoschema.schema.generated.python.dataset import (
+
+from ..schema.generated.dataset import (
     ChannelMetadata,
     ComputationStep,
     DatasetBundle,

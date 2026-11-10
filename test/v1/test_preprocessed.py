@@ -9,10 +9,11 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-from hdf5_helpers import write_v1_file
 
-from icoschema import DatasetBundle, PreprocessedRecording, Recording
-from icoschema.schema.generated.python import dataset as generated
+from icoschema.v1 import DatasetBundle, PreprocessedRecording, Recording
+from icoschema.v1.schema.generated import dataset as generated
+
+from .hdf5_helpers import write_v1_file
 
 FIXTURE = Path(__file__).resolve().parent / "test_with_sensors.hdf5"
 DEFAULT_TOTAL = 38_400_000 / (3 * 21 * 64)

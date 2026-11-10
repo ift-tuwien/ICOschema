@@ -5,10 +5,10 @@ import json
 import h5py
 import pytest
 
-from icoschema.model.python.dataset_bundle import DatasetBundle
-from icoschema.model.python.preprocessed_recording import PreprocessedRecording
-from icoschema.model.python.recording import DEFAULT_SOURCE_NAME, Recording, Source
-from icoschema.schema.generated.python import dataset as generated
+from icoschema.v1.model.dataset_bundle import DatasetBundle
+from icoschema.v1.model.preprocessed_recording import PreprocessedRecording
+from icoschema.v1.model.recording import DEFAULT_SOURCE_NAME, Recording, Source
+from icoschema.v1.schema.generated import dataset as generated
 
 
 def _source(name: str, *, counter: list[int], start_time: str, adc: tuple[int, int, int] | None = None, **ids) -> Source:

@@ -24,7 +24,7 @@ from icoschema import Recording, DatasetBundle
 
 import matplotlib.pyplot as plt
 
-recording = Recording.from_hdf5("test/test_with_sensors.hdf5")
+recording = Recording.from_hdf5("test/v1/test_with_sensors.hdf5")
 df = recording.to_dataframe()
 plt.plot(recording.timestamps, recording.channel1)
 plt.show()
@@ -60,7 +60,7 @@ The schema version decides which classes you work with; the file format version 
 `DatasetBundle.from_file(path)` takes either format, told apart by the file's first bytes. Like HDF5, reading dispatches
 on a format version, here the root property `icoschema_format_version`; a file without one is read with the *legacy*
 layout (`rawdata` group, `signalQuality` channels, one source per STU group), documented in
-`icoschema/storage/python/tdms.py`. A TDMS waveform has no packet counter, so a TDMS source has none: its
+`icoschema/v1/storage/tdms.py`. A TDMS waveform has no packet counter, so a TDMS source has none: its
 `sampling_frequency` is `1 / wf_increment`, its `timestamp`s are built from it, its `quality` is the file's
 `signalQuality` channel (own rate; `Source.signal_loss_percentage` is `100 - mean(quality)`), each channel's `Sensor`
 has the TDMS channel name and `unit_string`, and `additional_data` (opaque JSON) keeps the file's, group's and
@@ -96,7 +96,7 @@ print(recording.summary())                # JSON-encodable dict: per-channel min
 **Add a derived computation and persist it alongside the recording:**
 
 ```python
-from icoschema.schema.generated.python.dataset import DerivedDataset
+from icoschema import DerivedDataset
 
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")
 coeffs = my_wavelet_transform(bundle.recording.channel1)
@@ -230,7 +230,7 @@ producer.
 Regenerate the Python dataclasses after editing the schema:
 
 ```
-uv run gen-python icoschema/schema/linkml/dataset.yaml > icoschema/schema/generated/python/dataset.py
+uv run gen-python icoschema/v1/schema/dataset.yaml > icoschema/v1/schema/generated/dataset.py
 ```
 
 Run the tests:

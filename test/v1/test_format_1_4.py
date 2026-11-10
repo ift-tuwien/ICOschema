@@ -1,14 +1,16 @@
 """Format 1.4 (sources without a counter, with their own rate, quality or
 additional data), provenance and the start-offset accessors."""
 
+from pathlib import Path
+
 import h5py
 import pytest
 
-from icoschema import DatasetBundle
-from icoschema.model.python.recording import Recording, Source
-from icoschema.schema.generated.python import dataset as generated
+from icoschema.v1 import DatasetBundle
+from icoschema.v1.model.recording import Recording, Source
+from icoschema.v1.schema.generated import dataset as generated
 
-FIXTURE = "test/test_with_sensors.hdf5"
+FIXTURE = str(Path(__file__).resolve().parent / "test_with_sensors.hdf5")
 
 
 def _source(name: str, start: str | None, counter: list[int] | None = None, **extra) -> Source:

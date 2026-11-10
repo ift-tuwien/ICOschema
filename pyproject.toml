@@ -26,4 +26,4 @@ build-backend = "hatchling.build"
 packages = ["icoschema"]
 
 [tool.ruff]
-exclude = ["icoschema/schema/generated"]
+exclude = ["icoschema/*/schema/generated"]

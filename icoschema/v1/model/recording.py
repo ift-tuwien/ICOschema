@@ -8,7 +8,7 @@ A recording has one or more independent `Source`s (one per STU/STH
 combination), each with its own clock, counter, ADC settings and sensors.
 The per-source data and calculations (numpy getters, signal loss, gap-free
 grid, sampling frequency, DataFrame) live on `Source`
-(see ICOschema.model.python.source). For the very common recording with a
+(see icoschema.v1.model.source). For the very common recording with a
 single source, `Recording` forwards them, so `recording.channel1` and
 `Recording(hardware_metadata=..., recording_metadata=..., recording_data=...)`
 keep working; with several sources they raise a `ValueError` that names the
@@ -35,11 +35,11 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 import numpy as np
 import pandas as pd
 
-from icoschema.model.python.source import ADC_CLOCK_HZ, DEFAULT_ADC_SETTINGS, Source
-from icoschema.schema.generated.python import dataset as generated
+from ..schema.generated import dataset as generated
+from .source import ADC_CLOCK_HZ, DEFAULT_ADC_SETTINGS, Source
 
 if TYPE_CHECKING:
-    from icoschema.storage.python.hdf5 import FormatVersion
+    from ..storage.hdf5 import FormatVersion
 
 __all__ = ["ADC_CLOCK_HZ", "DEFAULT_ADC_SETTINGS", "DEFAULT_SOURCE_NAME", "Recording", "Source"]
 
@@ -54,7 +54,7 @@ _LEGACY_FIELDS = ("hardware_metadata", "recording_metadata", "recording_data")
 class Recording(generated.Recording):
     """A complete recording: one or more independent `Source`s.
 
-    Has every field of `ICOschema.schema.generated.python.dataset.Recording`
+    Has every field of `icoschema.v1.schema.generated.dataset.Recording`
     (`sources`, a dict keyed by source name), plus the loading/writing and
     convenience methods defined below. Construct via a `from_XXX` classmethod
     (e.g. `from_hdf5`) rather than the bare constructor when loading from
@@ -88,20 +88,20 @@ class Recording(generated.Recording):
     def from_hdf5(cls, path: str) -> Recording:
         """Load a Recording from a PyTables-style HDF5 file.
 
-        See ICOschema.storage.python.hdf5 for the accepted file layout and
+        See icoschema.v1.storage.hdf5 for the accepted file layout and
         the legacy/versioned format dispatch. Oblivious to any
         `/computations/` group the file may also contain -- use
-        ICOschema.DatasetBundle.from_hdf5() to read those too.
+        icoschema.DatasetBundle.from_hdf5() to read those too.
         """
-        from icoschema.storage.python import hdf5
+        from ..storage import hdf5
 
         return cls(sources=list(hdf5.load_recording(path).sources.values()))
 
     @classmethod
     def from_tdms(cls, path: str) -> Recording:
-        """Load a Recording from an NI TDMS file (read-only). See ICOschema.storage.python.tdms for the accepted layouts and
+        """Load a Recording from an NI TDMS file (read-only). See icoschema.v1.storage.tdms for the accepted layouts and
         the legacy/versioned format dispatch."""
-        from icoschema.storage.python import tdms
+        from ..storage import tdms
 
         return cls(sources=list(tdms.load_recording(path).sources.values()))
 
@@ -111,9 +111,9 @@ class Recording(generated.Recording):
         `format_version` picks the file format version; by default it is the oldest one that can hold the
         recording (so files stay readable by older readers). Raises `ValueError` if the version is unknown
         or can't hold the recording (e.g. several sources in "1.0"). See `hdf5_format_versions()`, and
-        ICOschema.storage.python.hdf5 for the file layouts.
+        icoschema.v1.storage.hdf5 for the file layouts.
         """
-        from icoschema.storage.python import hdf5
+        from ..storage import hdf5
 
         hdf5.save_recording(self, path, format_version=format_version)
 

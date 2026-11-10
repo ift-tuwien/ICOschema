@@ -1,10 +1,10 @@
-"""Synthetic test files, one per parser version, stored in `test/data/`.
+"""Synthetic test files, one per parser version, stored in `test/v1/data/`.
 
 Every file holds 10 seconds of sine waves sampled at 1 kHz (see `signal`). The files are committed so they can
 be checked out and opened with other tools; the tests read the stored files. To rewrite them after changing
 this module:
 
-    uv run python test/synthetic_files.py
+    cd test && uv run python -m v1.synthetic_files
 
 `test_parser_versions.py` regenerates every file into a temporary directory and compares it with the stored one,
 so a stale file fails the tests.
@@ -23,8 +23,9 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-from hdf5_helpers import SENSOR_DTYPE
-from tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
+
+from .hdf5_helpers import SENSOR_DTYPE
+from .tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 

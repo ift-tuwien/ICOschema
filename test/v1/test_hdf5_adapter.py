@@ -1,5 +1,5 @@
 """Verbose end-to-end test of the (internal) HDF5 storage adapter against the
-real fixture in test/test_with_sensors.hdf5, checking every level of the
+real fixture in test/v1/test_with_sensors.hdf5, checking every level of the
 schema it touches: RecordingMetadata, HardwareMetadata, Sensor,
 Compensation and RecordingData -- plus the write path (save_recording,
 save_dataset_bundle/load_dataset_bundle) added for DerivedDataset/
@@ -17,20 +17,21 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
-from hdf5_helpers import SENSOR_DTYPE, make_sensor_row, write_v1_file
 
-from icoschema.schema.generated.python.dataset import (
+from icoschema.v1.schema.generated.dataset import (
     DatasetBundle,
     DerivedDataset,
     LinearConversion,
     NoConversion,
 )
-from icoschema.storage.python.hdf5 import (
+from icoschema.v1.storage.hdf5 import (
     load_dataset_bundle,
     load_recording,
     save_dataset_bundle,
     save_recording,
 )
+
+from .hdf5_helpers import SENSOR_DTYPE, make_sensor_row, write_v1_file
 
 FIXTURE = Path(__file__).resolve().parent / "test_with_sensors.hdf5"
 
@@ -379,7 +380,7 @@ def test_load_recording_reads_a_first_generation_file(tmp_path, caplog):
     path = tmp_path / "first_generation.hdf5"
     _write_first_generation_file(path, columns=("x", "z"))
 
-    with caplog.at_level("WARNING", logger="icoschema.storage.python.hdf5"):
+    with caplog.at_level("WARNING", logger="icoschema.v1.storage.hdf5"):
         recording = load_recording(str(path))
 
     assert recording.sources["source1"].recording_data.channel1 == pytest.approx([-1.5, 0.5, 99.0])
@@ -399,7 +400,7 @@ def test_a_first_generation_file_without_a_readable_range_gets_an_unspecified_se
     path = tmp_path / "no_range.hdf5"
     _write_first_generation_file(path, sensor_range=sensor_range)
 
-    with caplog.at_level("WARNING", logger="icoschema.storage.python.hdf5"):
+    with caplog.at_level("WARNING", logger="icoschema.v1.storage.hdf5"):
         recording = load_recording(str(path))
 
     sensor = recording.sources["source1"].hardware_metadata.channel1_metadata.sensor
