@@ -31,13 +31,16 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Iterable
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from icoschema.model.python.preprocessed_recording import PreprocessedRecording
 from icoschema.model.python.recording import Recording
 from icoschema.model.python.source import Source
 from icoschema.schema.generated.python import dataset as generated
 from icoschema.schema.generated.python.dataset import ComputationStep, DerivedDataset
+
+if TYPE_CHECKING:
+    from icoschema.storage.python.hdf5 import FormatVersion
 
 _CHANNELS = ("channel1", "channel2", "channel3")
 
@@ -152,9 +155,13 @@ class DatasetBundle(generated.DatasetBundle):
             return cls.from_hdf5(path)
         raise ValueError(f"{path!r} is neither an HDF5 nor a TDMS file")
 
-    def to_hdf5(self, path: str) -> None:
+    def to_hdf5(self, path: str, *, format_version: FormatVersion | None = None) -> None:
         """Write this bundle (recording, preprocessed tables, every
         computation) to a fresh HDF5 file.
+
+        `format_version` picks the file format version; by default it is the oldest one that can hold the
+        bundle (so files stay readable by older readers). Raises `ValueError`, before writing anything, if
+        the version is unknown or can't hold the bundle (e.g. steps in "1.1"). See `hdf5_format_versions()`.
 
         See ICOschema.storage.python.hdf5 for the file layout this
         produces -- each computation is stored in its true N-D shape under
@@ -167,7 +174,7 @@ class DatasetBundle(generated.DatasetBundle):
         for table in self._tables():
             validate_preprocessed(cast(Source, recording.sources[str(table.source)]), table)
         validate_steps(self._steps(), self.computations, recording)
-        hdf5.save_dataset_bundle(self, path)
+        hdf5.save_dataset_bundle(self, path, format_version=format_version)
 
     # ── preprocessed ───────────────────────────────────────────────────────
 

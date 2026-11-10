@@ -6,7 +6,10 @@ Read dispatches on the root-level `icoschema_format_version` attribute:
 - Absent: the "legacy" format that predates this versioning scheme (e.g.
   test/test_with_sensors.hdf5). The primary table is hardcoded to
   "acceleration".
-- Present: parsed by the version-specific parser registered in _PARSERS.
+- Present: parsed by the version-specific parser of that version's `FormatSpec`
+  in `_FORMATS`, the registry that also says what each version can hold (the
+  writer uses it too: `format_version=` picks a version, and a bundle the
+  version can't hold is an error, not a silent loss).
   Version "1.0" records the primary table's name explicitly (root attribute
   `primary_table`), since it is no longer assumed to be "acceleration".
   Version "1.1" adds an optional preprocessed table, named by the root
@@ -61,7 +64,7 @@ Steps (1.2) are stored as `/steps/<node>`: an empty group per step with
 every field as an attribute (lists as string arrays, absent fields
 omitted), read back ordered by `step_index` and renumbered 0, 1, 2, ...
 
-Writing produces the lowest version that can represent the data: "1.0",
+Writing produces, unless `format_version` is given, the lowest version that can represent the data: "1.0",
 "1.1" with a preprocessed table, "1.2" with steps, "1.3" with more than one
 source (a single source always uses the 1.0-1.2 layout), "1.4" if a source
 has no counter or has a `sampling_frequency`, `quality` or `additional_data`
@@ -85,6 +88,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -117,11 +121,7 @@ _CHANNEL_SLOTS = ("channel1", "channel2", "channel3")
 _CHANNEL_METADATA_SLOTS = ("channel1_metadata", "channel2_metadata", "channel3_metadata")
 
 _LEGACY_PRIMARY_TABLE = "acceleration"
-_BASE_FORMAT_VERSION = "1.0"
-_PREPROCESSED_FORMAT_VERSION = "1.1"
-_STEPS_FORMAT_VERSION = "1.2"
-_SOURCES_FORMAT_VERSION = "1.3"
-_FEATURES_FORMAT_VERSION = "1.4"
+LEGACY_VERSION = "legacy"
 _QUALITY_DATASET = "quality"
 _PROVENANCE_ATTRS = ("source_format", "source_format_version", "reader")
 _COMPUTATIONS_GROUP = "computations"
@@ -404,36 +404,67 @@ def _load_recording_v14(f: h5py.File) -> Recording:
     return _load_recording_v13(f) if "sources" in f.attrs else _load_recording_v1(f)
 
 
-_PARSERS = {
-    "1.0": _load_recording_v1,
-    "1.1": _load_recording_v1,
-    "1.2": _load_recording_v1,
-    "1.3": _load_recording_v13,
-    "1.4": _load_recording_v14,
-}
+FormatVersion = Literal["1.0", "1.1", "1.2", "1.3", "1.4"]
+"""The versions `save_*`/`to_hdf5` can write (a test keeps this in step with `_FORMATS`)."""
 
 
-def _format_version(f: h5py.File, path: str) -> str | None:
-    """The file's format version (`None` for legacy files); raises
+@dataclasses.dataclass(frozen=True)
+class FormatSpec:
+    """One file format version: how to read it and what it can hold. The writer needs nothing else, so a new
+    version is one more entry in `_FORMATS` (plus its reader)."""
+
+    version: str
+    read: Callable[[h5py.File], Recording]
+    preprocessed: bool = False  # an optional preprocessed table (1.1)
+    steps: bool = False  # an optional /steps/ group (1.2)
+    # Where the sources are: "root" (one source, the primary table at the root), "sources" (always under
+    # /sources/<name>/, so several are possible) or "either" (at the root for one source, else under /sources/).
+    sources: Literal["root", "sources", "either"] = "root"
+    source_features: bool = False  # sources without a counter, or with a rate, quality or additional data (1.4)
+    writable: bool = True
+
+
+_FORMATS: dict[str, FormatSpec] = {
+    spec.version: spec
+    for spec in (
+        FormatSpec(LEGACY_VERSION, _load_recording_legacy, writable=False),
+        FormatSpec("1.0", _load_recording_v1),
+        FormatSpec("1.1", _load_recording_v1, preprocessed=True),
+        FormatSpec("1.2", _load_recording_v1, preprocessed=True, steps=True),
+        FormatSpec("1.3", _load_recording_v13, preprocessed=True, steps=True, sources="sources"),
+        FormatSpec("1.4", _load_recording_v14, preprocessed=True, steps=True, sources="either", source_features=True),
+    )
+}  # in the order the versions appeared: the writer picks the first that fits
+
+
+def readable_versions() -> tuple[str, ...]:
+    """Every format version `load_*` reads (the unversioned layout is called "legacy")."""
+    return tuple(_FORMATS)
+
+
+def writable_versions() -> tuple[str, ...]:
+    """Every format version `save_*` can write, oldest first."""
+    return tuple(version for version, spec in _FORMATS.items() if spec.writable)
+
+
+def _file_format(f: h5py.File, path: str) -> FormatSpec:
+    """The format of the file: its `icoschema_format_version`, or the legacy one if it has none; raises
     `ValueError` for a version this reader doesn't know."""
     version = f.attrs.get("icoschema_format_version")
     if version is None:
-        return None
+        return _FORMATS[LEGACY_VERSION]
     version = _decode(version)
-    if version not in _PARSERS:
+    if version == LEGACY_VERSION or version not in _FORMATS:
         raise ValueError(
             f"Unsupported icoschema_format_version {version!r} in {path!r}; "
-            f"supported versions: {sorted(_PARSERS)}"
+            f"supported versions: {sorted(v for v in _FORMATS if v != LEGACY_VERSION)}"
         )
-    return version
+    return _FORMATS[version]
 
 
 def load_recording(path: str) -> Recording:
     with h5py.File(path, "r") as f:
-        version = _format_version(f, path)
-        if version is None:
-            return _load_recording_legacy(f)
-        return _PARSERS[version](f)
+        return _file_format(f, path).read(f)
 
 
 # ── read: PreprocessedRecording ─────────────────────────────────────────────
@@ -466,20 +497,20 @@ def _read_preprocessed_table(
     )
 
 
-def _has_sources_layout(f: h5py.File, version: str | None) -> bool:
+def _has_sources_layout(f: h5py.File, spec: FormatSpec) -> bool:
     """Whether the file stores its sources under `/sources/` (1.3, or 1.4 with several)."""
-    return version == _SOURCES_FORMAT_VERSION or (version == _FEATURES_FORMAT_VERSION and "sources" in f.attrs)
+    return spec.sources == "sources" or (spec.sources == "either" and "sources" in f.attrs)
 
 
 def _load_preprocessed(f: h5py.File, path: str, recording: Recording) -> list[PreprocessedRecording]:
     """The preprocessed tables of a file (none for a file without any): the
     one at the root for a 1.1/1.2 file, one per source group that has one for
     a 1.3 file. Each gets its source's name."""
-    version = _format_version(f, path)
-    if version in (None, _BASE_FORMAT_VERSION) or "preprocessed_table" not in f.attrs:
+    spec = _file_format(f, path)
+    if not spec.preprocessed or "preprocessed_table" not in f.attrs:
         return []
     table_name = _decode(f.attrs["preprocessed_table"])
-    if not _has_sources_layout(f, version):
+    if not _has_sources_layout(f, spec):
         return [_read_preprocessed_table(f, table_name, path, str(next(iter(recording.sources))))]
     tables = [
         _read_preprocessed_table(f[_SOURCES_GROUP][str(name)], table_name, path, str(name))
@@ -655,10 +686,7 @@ def _load_steps(
     2, ... A malformed step, or one whose `output_keys` aren't all in
     `computations` (e.g. because a malformed computation was skipped), is
     logged and dropped -- or raises with `on_error="raise"`."""
-    if (
-        _format_version(f, path) not in (_STEPS_FORMAT_VERSION, _SOURCES_FORMAT_VERSION, _FEATURES_FORMAT_VERSION)
-        or _STEPS_GROUP not in f
-    ):
+    if not _file_format(f, path).steps or _STEPS_GROUP not in f:
         return []
     steps: list[ComputationStep] = []
     for node, step_group in f[_STEPS_GROUP].items():
@@ -679,16 +707,50 @@ def _load_steps(
     return [dataclasses.replace(step, step_index=i) for i, step in enumerate(steps)]
 
 
-def _uses_source_features(recording: Recording) -> bool:
-    """Whether a source needs format 1.4: no packet counter, or a sampling
-    frequency, quality or additional data of its own."""
-    return any(
-        source.sampling_frequency is not None
-        or source.quality is not None
-        or source.additional_data is not None
-        or not source.recording_data.counter
-        for source in recording.sources.values()
-    )
+def _source_features(source: Source) -> list[str]:
+    """What a source has that only formats with `source_features` (1.4) can store."""
+    features = []
+    if not source.recording_data.counter:
+        features.append("no packet counter")
+    if source.sampling_frequency is not None:
+        features.append("a sampling_frequency")
+    if source.quality is not None:
+        features.append("quality")
+    if source.additional_data is not None:
+        features.append("additional_data")
+    return features
+
+
+def _unrepresentable(bundle: DatasetBundle, spec: FormatSpec) -> list[str]:
+    """Why `spec` can't hold `bundle` (empty if it can)."""
+    if not spec.writable:
+        return [f"format {spec.version!r} can only be read"]
+    reasons = []
+    if bundle.preprocessed_tables and not spec.preprocessed:
+        reasons.append("it has a preprocessed table")
+    if bundle.steps and not spec.steps:
+        reasons.append("it has computation steps")
+    if len(bundle.recording.sources) > 1 and spec.sources == "root":
+        reasons.append(f"it has {len(bundle.recording.sources)} sources")
+    if not spec.source_features:
+        for source in bundle.recording.sources.values():
+            if features := _source_features(source):
+                reasons.append(f"source {str(source.name)!r} has {', '.join(features)}")
+    return reasons
+
+
+def _choose_format(bundle: DatasetBundle, format_version: str | None) -> FormatSpec:
+    """The format to write `bundle` in: `format_version`, or (if `None`) the oldest version that can hold it,
+    so files without the newer parts stay readable by older readers. Raises `ValueError` if the version is
+    unknown, or can't hold the bundle -- nothing is dropped silently."""
+    if format_version is None:
+        return next(spec for spec in _FORMATS.values() if not _unrepresentable(bundle, spec))
+    spec = _FORMATS.get(format_version)
+    if spec is None or not spec.writable:
+        raise ValueError(f"Cannot write format_version {format_version!r}; writable versions: {list(writable_versions())}")
+    if reasons := _unrepresentable(bundle, spec):
+        raise ValueError(f"Cannot write format {format_version!r}: " + "; ".join(reasons))
+    return spec
 
 
 def _write_provenance(f: h5py.File, provenance: Provenance | None) -> None:
@@ -700,24 +762,24 @@ def _write_provenance(f: h5py.File, provenance: Provenance | None) -> None:
                 f.attrs[name] = str(value)
 
 
-def _read_provenance(f: h5py.File, version: str | None) -> Provenance:
+def _read_provenance(f: h5py.File, version: str) -> Provenance:
     """What the file says about where its data came from; a file that says nothing
     is data read from HDF5 of its own format version."""
     if "source_format" in f.attrs:
         origin = {name: _optional_str(f.attrs, name) for name in _PROVENANCE_ATTRS}
     else:
-        origin = {"source_format": "hdf5", "source_format_version": version or "legacy", "reader": software_id()}
+        origin = {"source_format": "hdf5", "source_format_version": version, "reader": software_id()}
     return Provenance(**origin, writer=_optional_str(f.attrs, "writer"))
 
 
-def _write_recording(f: h5py.File, recording: Recording, table_name: str, *, features: bool = False) -> bool:
-    """Write the sources of `recording`; returns whether it used the several-sources
-    layout (1.3/1.4). A single source is the primary table at the root. With
-    `features` (1.4) a single source's name is always stored."""
+def _write_recording(f: h5py.File, recording: Recording, table_name: str, spec: FormatSpec) -> bool:
+    """Write the sources of `recording` as `spec` lays them out; returns whether it used the `/sources/`
+    layout. A single source is the primary table at the root unless the format always uses `/sources/`
+    (1.3). With `source_features` (1.4) a single source's name is always stored."""
     sources = list(recording.sources.values())
     f.attrs["primary_table"] = table_name
-    if len(sources) == 1:
-        _write_recording_table(f, sources[0], table_name, always_name=features)
+    if len(sources) == 1 and spec.sources != "sources":
+        _write_recording_table(f, sources[0], table_name, always_name=spec.source_features)
         return False
     f.attrs.create("sources", [str(source.name) for source in sources], dtype=h5py.string_dtype())
     group = f.create_group(_SOURCES_GROUP)
@@ -726,18 +788,14 @@ def _write_recording(f: h5py.File, recording: Recording, table_name: str, *, fea
     return True
 
 
-def save_recording(recording: Recording, path: str, *, table_name: str = "recording") -> None:
-    """Write a Recording to a fresh HDF5 file: the base (1.0) format for one
-    source, 1.3 for several."""
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    features = _uses_source_features(recording)
-    with h5py.File(path, "w") as f:
-        multiple = _write_recording(f, recording, table_name, features=features)
-        if features:
-            f.attrs["icoschema_format_version"] = _FEATURES_FORMAT_VERSION
-        else:
-            f.attrs["icoschema_format_version"] = _SOURCES_FORMAT_VERSION if multiple else _BASE_FORMAT_VERSION
-        _write_provenance(f, None)
+def save_recording(
+    recording: Recording, path: str, *, table_name: str = "recording", format_version: FormatVersion | None = None
+) -> None:
+    """Write a Recording to a fresh HDF5 file: in `format_version`, or (by default) the oldest version that
+    can hold it. See `save_dataset_bundle`."""
+    save_dataset_bundle(
+        DatasetBundle(recording=recording), path, table_name=table_name, format_version=format_version
+    )
 
 
 # ── read/write: DerivedDataset / DatasetBundle ──────────────────────────────
@@ -783,34 +841,33 @@ def _tables_by_source(bundle: DatasetBundle) -> dict[str, PreprocessedRecording]
     return tables
 
 
-def save_dataset_bundle(bundle: DatasetBundle, path: str, *, table_name: str = "recording") -> None:
+def save_dataset_bundle(
+    bundle: DatasetBundle,
+    path: str,
+    *,
+    table_name: str = "recording",
+    format_version: FormatVersion | None = None,
+) -> None:
     """Write a DatasetBundle: the recording as the primary table (or one per
     source), the preprocessed tables if any, every DerivedDataset under a
     `/computations/` group, each in its true N-D shape, and the steps under
-    `/steps/`. Uses the lowest sufficient format: 1.4 if a source needs it
-    (see the module docstring), 1.3 with several sources
-    (preprocessed tables go into their source's group), else 1.2 with steps,
-    else 1.1 with a preprocessed table, else 1.0.
+    `/steps/`. Writes `format_version`, or by default the lowest sufficient
+    format: 1.4 if a source needs it (see the module docstring), 1.3 with
+    several sources (preprocessed tables go into their source's group), else
+    1.2 with steps, else 1.1 with a preprocessed table, else 1.0. Raises
+    `ValueError` (before anything is written) if `format_version` is unknown
+    or can't hold the bundle.
 
     Doesn't check that the preprocessed tables fit their sources or that the
     steps are consistent -- that's the model layer's job
     (`DatasetBundle.to_hdf5`)."""
     tables = _tables_by_source(bundle)
+    spec = _choose_format(bundle, format_version)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    features = _uses_source_features(bundle.recording)
     with h5py.File(path, "w") as f:
-        multiple = _write_recording(f, bundle.recording, table_name, features=features)
+        multiple = _write_recording(f, bundle.recording, table_name, spec)
         _write_provenance(f, bundle.provenance)
-        if features:
-            f.attrs["icoschema_format_version"] = _FEATURES_FORMAT_VERSION
-        elif multiple:
-            f.attrs["icoschema_format_version"] = _SOURCES_FORMAT_VERSION
-        elif bundle.steps:
-            f.attrs["icoschema_format_version"] = _STEPS_FORMAT_VERSION
-        elif tables:
-            f.attrs["icoschema_format_version"] = _PREPROCESSED_FORMAT_VERSION
-        else:
-            f.attrs["icoschema_format_version"] = _BASE_FORMAT_VERSION
+        f.attrs["icoschema_format_version"] = spec.version
         if tables:
             f.attrs["preprocessed_table"] = _PREPROCESSED_TABLE
             for name, table in tables.items():
@@ -855,7 +912,7 @@ def load_dataset_bundle(path: str, *, on_error: Literal["skip", "raise"] = "skip
             group.visititems(_visit)
 
         steps = _load_steps(f, path, computations, on_error)
-        provenance = _read_provenance(f, _format_version(f, path))
+        provenance = _read_provenance(f, _file_format(f, path).version)
 
     return DatasetBundle(
         recording=recording,

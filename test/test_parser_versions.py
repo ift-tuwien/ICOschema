@@ -62,7 +62,7 @@ def test_the_stored_files_are_the_ones_the_generator_makes(tmp_path: Path) -> No
 
 
 def test_every_hdf5_parser_has_a_stored_file() -> None:
-    assert set(VERSIONS) == {"legacy", *hdf5_storage._PARSERS}  # a new parser needs a new builder
+    assert set(VERSIONS) == set(hdf5_storage.readable_versions())  # a new parser needs a new builder
     assert {version for version, _ in HDF5_WRITERS} == set(VERSIONS)
 
 
