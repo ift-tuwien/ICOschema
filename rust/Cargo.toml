@@ -1,0 +1,22 @@
+[package]
+name = "icoschema"
+version = "0.3.0"
+edition = "2021"
+description = "Rust port of ICOschema: generated schema types, a model API and an HDF5 reader and writer"
+publish = false
+
+[dependencies]
+icoschema-gen-v1 = { path = "../icoschema/v1/schema/generated/rust", default-features = false }
+icoschema-gen-v2 = { path = "../icoschema/v2/schema/generated/rust", default-features = false }
+rust-hdf5 = "0.7"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+tedium = { version = "0.2", optional = true }
+
+[features]
+default = ["tdms"]
+# Reading TDMS files (storage::tdms), with the `tedium` crate.
+tdms = ["dep:tedium"]
+
+[dev-dependencies]
+serde_yml = "0.0.12"

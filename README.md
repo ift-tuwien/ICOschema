@@ -258,18 +258,101 @@ producer.
 
 ## Development
 
-Regenerate the Python dataclasses after editing the schema:
+Regenerate the Python dataclasses **and** the Rust types after editing the schema:
 
 ```
-uv run gen-python icoschema/v1/schema/dataset.yaml > icoschema/v1/schema/generated/dataset.py
-uv run gen-python icoschema/v2/schema/dataset.yaml > icoschema/v2/schema/generated/dataset.py
+just generate
 ```
 
-Run the tests:
+(`just check-generated` fails if the committed generated code is stale; CI runs it.) Run the tests:
 
 ```
-uv run pytest
+just test        # Python
+just test-rust   # Rust, see below
 ```
+
+### Rust port
+
+`rust/` is a Rust port of the model and storage layers, laid out like the Python package. Every schema version is a module of its own, self-contained like the Python
+package of the same name (`icoschema::v1` is `icoschema.v1`, `icoschema::v2` is `icoschema.v2`), and the names at the
+top level (`icoschema::DatasetBundle`, ...) are those of the latest one, version 2:
+
+| | Python | Rust |
+|---|---|---|
+| generated schema | `icoschema/vN/schema/generated/dataset.py` | `icoschema/vN/schema/generated/rust` (crate `icoschema-gen-vN`) |
+| model (convenience API) | `icoschema/vN/model` | `rust/src/vN/model` |
+| storage (HDF5, TDMS) | `icoschema/vN/storage` | `rust/src/vN/storage` |
+| migration, reading any version | `icoschema/migrate.py`, `icoschema/_read.py` | `rust/src/migrate.rs` |
+
+Opening a file of any schema version as the latest one: `icoschema::read(path)` (a version 1 file is migrated by
+`icoschema::migrate`, with the same rules as the Python package: see "Schema version 2" above;
+`migrate::convert_file(old, new)` writes the result as a version 2 file), and `icoschema::schema_version_of_file(path)`
+tells the version of a file without reading its data.
+
+The rest of the Python API that has a Rust counterpart: `hdf5_format_versions(writable)` (per version module, and at the
+top level for the latest), `to_hdf5_with(path, Some("1.2"))` to write a chosen format version (an error if the data does
+not fit it; `to_hdf5(path)` picks the oldest that fits), `from_hdf5_with(path, OnError::Raise)` to fail on a malformed
+computation or step instead of skipping it with a warning (the default, as in Python; `from_hdf5_with_warnings` returns
+the warnings), and `Source::start_datetime()` / `Recording::earliest_start_datetime()` returning a `DateTime` (naive,
+microseconds, ordered, `Display` as ISO 8601, `components()`, `seconds_since`, `plus_seconds`). There is no
+`to_dataframe`: use `channel(n)` and the column getters.
+
+```rust
+let bundle = icoschema::DatasetBundle::from_hdf5("some_file.hdf5")?;
+let source = bundle.recording.only_source()?;   // a recording has one or more sources
+println!("{:.3} % lost", source.signal_loss_percentage());
+let grid = source.sample_index()?;
+let offsets = bundle.recording.start_offsets()?; // sources placed by their start times
+```
+
+Schema version 1 (`icoschema::v1`) reads all file format versions (legacy, 1.0 to 1.4) and writes 1.0 to 1.4 (several
+sources, sources without a packet counter, `quality`, `additional_data`, provenance) like the Python package; schema
+version 2 (`icoschema::v2`) reads and writes format 2.0, whose `sensors` table holds a conversion per channel (and
+refuses version 1 files with a message pointing to `icoschema::v1`). In both, and `DatasetBundle::from_file`
+tells HDF5 from TDMS by content. It reads TDMS files too (`DatasetBundle::from_tdms`, the legacy layout, with the
+[`tedium`](https://crates.io/crates/tedium) crate, behind the `tdms` feature, on by default). Where it differs
+from Python: NI scaling supports the `Linear` and `Polynomial` scale types (another type is an error, as in
+`tdmspy`), a quality channel that is declared
+with a type but holds no values is an error (a `tedium` limitation: the acquisition software's void-typed empty
+channels work), and TDMS files that use DAQmx raw data are refused. Groups and channels keep their file order, which
+`tedium` does not, so the reader scans the segment headers for it.
+Storage uses [`rust-hdf5`](https://crates.io/crates/rust-hdf5), a pure Rust HDF5 library, so it builds without libhdf5 or any other C
+code. The one thing `rust-hdf5` cannot do is read arrays of variable-length strings (`inputs`, `output_keys` of a step);
+`rust/src/vN/storage/vlen.rs` does that itself.
+
+```rust
+let bundle = icoschema::DatasetBundle::from_hdf5("in.hdf5")?
+    .with_computation("rms/channel1", derived)
+    .with_step(step)?;               // numbered, validated like the Python `with_step`
+bundle.to_hdf5("out.hdf5")?;         // gzip + shuffle, lowest sufficient format version
+```
+
+The writer produces what the Python writer produces (the tests compare what Python reads back), with two differences,
+both on purpose: where Python quietly loses information the Rust writer returns an error. That covers (in version 1) compensations
+the file format has no place for (`PolynomialConversion`, `FrequencyCompensation`, more than one per channel), the hardware `revision`, values
+that do not fit their column (counter above 255, negative timestamps, a sensor text longer than its field) and
+computation dtypes it cannot store. And a failed write never leaves a file: it writes to `<file>.tmp` and renames it.
+Files use HDF5 superblock version 2, which every HDF5 library since 1.8 reads.
+
+**Changing the schema.** Edit `icoschema/vN/schema/dataset.yaml`, run `just generate`, then `just test-rust`. (`gen-rust`
+cannot handle `designates_type`, so `scripts/generate.py` generates the Rust crate from a copy of the schema without
+that line; the Rust code does not use the designator.) The Rust side cannot silently fall behind:
+
+- a new or renamed *attribute* makes `rust/src/storage` fail to compile (every generated struct is built field by
+  field), pointing at the code to extend;
+- a new *enum value* fails to compile too (the enum name tables match exhaustively);
+- a new *class* or *subclass* can compile fine, so `rust/tests/schema_coverage.rs` (`schema_coverage_v2.rs`) compares the schema with the
+  manifest in `rust/src/vN/schema_support.rs` and fails naming the new element. Handle it, then list it there (as handled,
+  or as unsupported with the reason, for things the file format has no place for such as `PolynomialConversion`).
+
+The Rust tests of schema version 2 read the stored synthetic files of the Python package (`test/v2/data`, `rust/tests/v2.rs`)
+and the migration is tested on those of version 1 (`test/v1/data`, `rust/tests/migrate.rs`). The tests of version 1 read fixtures in
+`rust/tests/fixtures` and compare every value with what the Python implementation reads
+from the same files (`expected.json`, `reference.rs`), and what it reads after writing them again (`expected_roundtrip.json`,
+`writer.rs`). `rust/tests/interop.py` (part of `just test-rust`) goes the other way: Rust writes every fixture and the
+Python package, on libhdf5 through h5py, must read the same content; the same for the version 2 files, and Rust's migration of
+every version 1 file must read as Python's. After changing the Python reader or writer, rebuild
+the fixtures with `just rust-fixtures`.
 
 ## Schema
 

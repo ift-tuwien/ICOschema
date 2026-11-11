@@ -24,6 +24,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["icoschema"]
+exclude = ["icoschema/v1/schema/generated/rust", "icoschema/v2/schema/generated/rust"]
 
 [tool.ruff]
 exclude = ["icoschema/*/schema/generated"]
