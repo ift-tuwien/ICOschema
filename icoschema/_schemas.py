@@ -18,11 +18,12 @@ from types import ModuleType
 # The schema versions of this package: add the new one here (and nothing else about it).
 SCHEMA_MODULES: dict[int, str] = {
     1: "icoschema.v1",
+    2: "icoschema.v2",
 }
 
 # The latest schema version: what the top-level `icoschema` names stand for. Move it together with the imports
 # in icoschema/__init__.py (a test checks that they agree).
-LATEST: int = 1
+LATEST: int = 2
 
 FORMAT_VERSION_NAME = "icoschema_format_version"
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"

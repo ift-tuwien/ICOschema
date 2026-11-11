@@ -36,8 +36,9 @@ test/
 4. **Adapt `test/v2/`:** regenerate the stored files (`cd test && uv run python -m v2.synthetic_files`) after
    changing the generator in `test/v2/synthetic_files.py`, and update the tests to the new schema.
 5. **Migrations** between versions (a v1 file read as v2, a v2 bundle written as v1) belong to neither version:
-   put them in `icoschema/migrate/` once their rules are decided.
-6. **Move the latest pointer** when `v2` is ready to be what `from icoschema import Recording` means:
+   put them in `icoschema/migrate.py` (v1 -> v2 is there).
+6. **Move the latest pointer** when `v2` is ready to be what `from icoschema import Recording` means (not before
+   there is a way to read the files of the old version with it, as the top-level names then read only the new one):
    - `LATEST = 2` in `icoschema/_schemas.py`,
    - in `icoschema/__init__.py`: `from icoschema import v1, v2` and `from icoschema.v2 import (...)` instead of
      `v1`. (`test/test_schemas.py` fails until the two agree.)

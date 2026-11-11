@@ -38,8 +38,12 @@ def test_a_schema_version_is_importable_from_the_package(version: int) -> None:
 # ── the pointer to the latest ────────────────────────────────────────────────
 
 
-def test_the_latest_is_the_newest_version() -> None:
-    assert _schemas.LATEST == max(VERSIONS)
+def test_the_latest_is_a_registered_version() -> None:
+    # (it is moved to a new version on purpose, when that is ready to be what `from icoschema import ...` means)
+    assert _schemas.LATEST in VERSIONS
+
+
+VERSION_NEUTRAL = {"read", "schema_version_of_file"}  # defined once for all versions, not by the latest
 
 
 def test_the_top_level_names_are_those_of_the_latest_schema_version() -> None:
@@ -47,7 +51,7 @@ def test_the_top_level_names_are_those_of_the_latest_schema_version() -> None:
     names = [
         name
         for name in icoschema.__all__
-        if not (name[0] == "v" and name[1:].isdigit())
+        if not (name[0] == "v" and name[1:].isdigit()) and name not in VERSION_NEUTRAL
     ]
     assert names  # not vacuous
     for name in names:

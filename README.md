@@ -54,6 +54,37 @@ v1.hdf5_format_versions(writable=True)              # ("1.0", "1.1", "1.2", "1.3
 
 The schema version decides which classes you work with; the file format version is only how they are stored.
 
+### Schema version 2 (`icoschema.v2`)
+
+Compared to version 1:
+
+- `Sensor` has no `phys_min`, `phys_max`, `volt_min` and `volt_max` any more.
+- Every `ChannelMetadata` has a `conversion` next to its `sensor` (required), replacing the list `compensations`.
+  Only two kinds remain: `NoConversion` (no conversion is defined: the values are raw voltage values) and
+  `LinearConversion` (`converted = raw * gain + offset`, in the sensor's unit). `Compensation`,
+  `FrequencyCompensation` and `PolynomialConversion` are gone. A conversion carries a `conversion_type` (its class
+  name), which keeps a parameterless `NoConversion` from being an empty value.
+- `Source.stu_id` and `Source.sth_id` are `stu_mac` and `sth_mac`; a source has a new optional `description`.
+- Its HDF5 files are format `2.0` (one layout that holds everything the `1.x` formats did): the `sensors` table has
+  the columns `dimension`, `name`, `sensor_id`, `sensor_type`, `unit` and the channel's conversion (`conversion`
+  "none" or "linear", `gain`, `offset`); there is no table-wide `conversion` attribute; a source's `description`,
+  `stu_mac` and `sth_mac` are attributes of its primary table. Files of version 1 (`1.x` or unversioned) are read
+  with `icoschema.v1`; reading one with `icoschema.v2` raises an error that says so.
+- A TDMS file is still read in its one (unversioned) layout. Its values are in the unit of the channel already, so
+  each channel gets an identity `LinearConversion` (not `NoConversion`), and `stu_mac` stays unset (a group name is
+  not a MAC address).
+
+`from icoschema import ...` means version 2 (the latest); `from icoschema import v1` stays on version 1, which is
+the one that reads version 1 files. `icoschema.migrate` converts version 1 data to version 2:
+`migrate.convert_file("old.hdf5", "new.hdf5")` or `migrate.v1_to_v2(bundle)`. Every channel becomes a
+`LinearConversion`, whatever the v1 file's `conversion` attribute says: gain and offset are the channel's
+`scaling_factor`/`offset` of the file's `sensors` table, else those of a v1 `LinearConversion`, else derived from the
+sensor's range (`gain = Δphys / Δvolt`, `offset = phys_min - gain * volt_min`), else 1 and 0.
+
+To open a file of any schema version in an application, use `icoschema.read(path)`: it returns the latest
+`DatasetBundle`, migrating an older file as above. `icoschema.schema_version_of_file(path)` tells the version of a
+file without reading it. (A TDMS file has no format version, so it always counts as version 1.)
+
 ### TDMS files (read-only)
 
 `DatasetBundle.from_tdms(path)` / `Recording.from_tdms(path)` read an NI TDMS file, and
@@ -231,6 +262,7 @@ Regenerate the Python dataclasses after editing the schema:
 
 ```
 uv run gen-python icoschema/v1/schema/dataset.yaml > icoschema/v1/schema/generated/dataset.py
+uv run gen-python icoschema/v2/schema/dataset.yaml > icoschema/v2/schema/generated/dataset.py
 ```
 
 Run the tests:
