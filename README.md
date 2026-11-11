@@ -24,7 +24,7 @@ from icoschema import Recording, DatasetBundle
 
 import matplotlib.pyplot as plt
 
-recording = Recording.from_hdf5("test/test_with_sensors.hdf5")
+recording = Recording.from_hdf5("test/v1/test_with_sensors.hdf5")
 df = recording.to_dataframe()
 plt.plot(recording.timestamps, recording.channel1)
 plt.show()
@@ -38,13 +38,60 @@ bundle = bundle.with_computation("wavelet_coefficients/channel1/details", derive
 bundle.to_hdf5("some_file.hdf5")
 ```
 
+### Schema and file format versions
+
+`from icoschema import ...` gives the latest schema version. To stay on one, import from its namespace; it has the
+whole API (`Recording`, `Source`, `DatasetBundle`, `Sensor`, ... all as typed dataclasses):
+
+```python
+from icoschema import v1
+
+bundle = v1.DatasetBundle.from_hdf5("some_file.hdf5")
+bundle.to_hdf5("out.hdf5")                          # the oldest file format version that can hold the bundle
+bundle.to_hdf5("out.hdf5", format_version="1.2")    # a chosen one; ValueError if it can't hold the bundle
+v1.hdf5_format_versions(writable=True)              # ("1.0", "1.1", "1.2", "1.3", "1.4")
+```
+
+The schema version decides which classes you work with; the file format version is only how they are stored.
+
+### Schema version 2 (`icoschema.v2`)
+
+Compared to version 1:
+
+- `Sensor` has no `phys_min`, `phys_max`, `volt_min` and `volt_max` any more.
+- Every `ChannelMetadata` has a `conversion` next to its `sensor` (required), replacing the list `compensations`.
+  Only two kinds remain: `NoConversion` (no conversion is defined: the values are raw voltage values) and
+  `LinearConversion` (`converted = raw * gain + offset`, in the sensor's unit). `Compensation`,
+  `FrequencyCompensation` and `PolynomialConversion` are gone. A conversion carries a `conversion_type` (its class
+  name), which keeps a parameterless `NoConversion` from being an empty value.
+- `Source.stu_id` and `Source.sth_id` are `stu_mac` and `sth_mac`; a source has a new optional `description`.
+- Its HDF5 files are format `2.0` (one layout that holds everything the `1.x` formats did): the `sensors` table has
+  the columns `dimension`, `name`, `sensor_id`, `sensor_type`, `unit` and the channel's conversion (`conversion`
+  "none" or "linear", `gain`, `offset`); there is no table-wide `conversion` attribute; a source's `description`,
+  `stu_mac` and `sth_mac` are attributes of its primary table. Files of version 1 (`1.x` or unversioned) are read
+  with `icoschema.v1`; reading one with `icoschema.v2` raises an error that says so.
+- A TDMS file is still read in its one (unversioned) layout. Its values are in the unit of the channel already, so
+  each channel gets an identity `LinearConversion` (not `NoConversion`), and `stu_mac` stays unset (a group name is
+  not a MAC address).
+
+`from icoschema import ...` means version 2 (the latest); `from icoschema import v1` stays on version 1, which is
+the one that reads version 1 files. `icoschema.migrate` converts version 1 data to version 2:
+`migrate.convert_file("old.hdf5", "new.hdf5")` or `migrate.v1_to_v2(bundle)`. Every channel becomes a
+`LinearConversion`, whatever the v1 file's `conversion` attribute says: gain and offset are the channel's
+`scaling_factor`/`offset` of the file's `sensors` table, else those of a v1 `LinearConversion`, else derived from the
+sensor's range (`gain = Δphys / Δvolt`, `offset = phys_min - gain * volt_min`), else 1 and 0.
+
+To open a file of any schema version in an application, use `icoschema.read(path)`: it returns the latest
+`DatasetBundle`, migrating an older file as above. `icoschema.schema_version_of_file(path)` tells the version of a
+file without reading it. (A TDMS file has no format version, so it always counts as version 1.)
+
 ### TDMS files (read-only)
 
 `DatasetBundle.from_tdms(path)` / `Recording.from_tdms(path)` read an NI TDMS file, and
 `DatasetBundle.from_file(path)` takes either format, told apart by the file's first bytes. Like HDF5, reading dispatches
 on a format version, here the root property `icoschema_format_version`; a file without one is read with the *legacy*
 layout (`rawdata` group, `signalQuality` channels, one source per STU group), documented in
-`icoschema/storage/python/tdms.py`. A TDMS waveform has no packet counter, so a TDMS source has none: its
+`icoschema/v1/storage/tdms.py`. A TDMS waveform has no packet counter, so a TDMS source has none: its
 `sampling_frequency` is `1 / wf_increment`, its `timestamp`s are built from it, its `quality` is the file's
 `signalQuality` channel (own rate; `Source.signal_loss_percentage` is `100 - mean(quality)`), each channel's `Sensor`
 has the TDMS channel name and `unit_string`, and `additional_data` (opaque JSON) keeps the file's, group's and
@@ -80,7 +127,7 @@ print(recording.summary())                # JSON-encodable dict: per-channel min
 **Add a derived computation and persist it alongside the recording:**
 
 ```python
-from icoschema.schema.generated.python.dataset import DerivedDataset
+from icoschema import DerivedDataset
 
 bundle = DatasetBundle.from_hdf5("some_file.hdf5")
 coeffs = my_wavelet_transform(bundle.recording.channel1)
@@ -226,13 +273,21 @@ just test-rust   # Rust, see below
 
 ### Rust port
 
-`rust/` is a Rust port of the model and storage layers, laid out like the Python package:
+`rust/` is a Rust port of the model and storage layers, laid out like the Python package. Every schema version is a module of its own, self-contained like the Python
+package of the same name (`icoschema::v1` is `icoschema.v1`, `icoschema::v2` is `icoschema.v2`), and the names at the
+top level (`icoschema::DatasetBundle`, ...) are those of the latest one, version 2:
 
 | | Python | Rust |
 |---|---|---|
-| generated schema | `icoschema/schema/generated/python` | `icoschema/schema/generated/rust` (crate `icoschema-gen`) |
-| model (convenience API) | `icoschema/model/python` | `rust/src/model` |
-| storage (HDF5) | `icoschema/storage/python/hdf5.py` | `rust/src/storage` |
+| generated schema | `icoschema/vN/schema/generated/dataset.py` | `icoschema/vN/schema/generated/rust` (crate `icoschema-gen-vN`) |
+| model (convenience API) | `icoschema/vN/model` | `rust/src/vN/model` |
+| storage (HDF5, TDMS) | `icoschema/vN/storage` | `rust/src/vN/storage` |
+| migration, reading any version | `icoschema/migrate.py`, `icoschema/_read.py` | `rust/src/migrate.rs` |
+
+Opening a file of any schema version as the latest one: `icoschema::read(path)` (a version 1 file is migrated by
+`icoschema::migrate`, with the same rules as the Python package: see "Schema version 2" above;
+`migrate::convert_file(old, new)` writes the result as a version 2 file), and `icoschema::schema_version_of_file(path)`
+tells the version of a file without reading its data.
 
 ```rust
 let bundle = icoschema::DatasetBundle::from_hdf5("some_file.hdf5")?;
@@ -242,8 +297,10 @@ let grid = source.sample_index()?;
 let offsets = bundle.recording.start_offsets()?; // sources placed by their start times
 ```
 
-It reads all file format versions (legacy, 1.0 to 1.4) and writes 1.0 to 1.4 (several sources, sources without a
-packet counter, `quality`, `additional_data`, provenance) like the Python package, and `DatasetBundle::from_file`
+Schema version 1 (`icoschema::v1`) reads all file format versions (legacy, 1.0 to 1.4) and writes 1.0 to 1.4 (several
+sources, sources without a packet counter, `quality`, `additional_data`, provenance) like the Python package; schema
+version 2 (`icoschema::v2`) reads and writes format 2.0, whose `sensors` table holds a conversion per channel (and
+refuses version 1 files with a message pointing to `icoschema::v1`). In both, and `DatasetBundle::from_file`
 tells HDF5 from TDMS by content. It reads TDMS files too (`DatasetBundle::from_tdms`, the legacy layout, with the
 [`tedium`](https://crates.io/crates/tedium) crate, behind the `tdms` feature, on by default). Where it differs
 from Python: NI scaling supports the `Linear` and `Polynomial` scale types (another type is an error, as in
@@ -253,7 +310,7 @@ channels work), and TDMS files that use DAQmx raw data are refused. Groups and c
 `tedium` does not, so the reader scans the segment headers for it.
 Storage uses [`rust-hdf5`](https://crates.io/crates/rust-hdf5), a pure Rust HDF5 library, so it builds without libhdf5 or any other C
 code. The one thing `rust-hdf5` cannot do is read arrays of variable-length strings (`inputs`, `output_keys` of a step);
-`rust/src/storage/vlen.rs` does that itself.
+`rust/src/vN/storage/vlen.rs` does that itself.
 
 ```rust
 let bundle = icoschema::DatasetBundle::from_hdf5("in.hdf5")?
@@ -263,26 +320,30 @@ bundle.to_hdf5("out.hdf5")?;         // gzip + shuffle, lowest sufficient format
 ```
 
 The writer produces what the Python writer produces (the tests compare what Python reads back), with two differences,
-both on purpose: where Python quietly loses information the Rust writer returns an error. That covers compensations
-the file format has no place for (`PolynomialConversion`, `FrequencyCompensation`, more than one per channel, the hardware `revision`), values
+both on purpose: where Python quietly loses information the Rust writer returns an error. That covers (in version 1) compensations
+the file format has no place for (`PolynomialConversion`, `FrequencyCompensation`, more than one per channel), the hardware `revision`, values
 that do not fit their column (counter above 255, negative timestamps, a sensor text longer than its field) and
 computation dtypes it cannot store. And a failed write never leaves a file: it writes to `<file>.tmp` and renames it.
 Files use HDF5 superblock version 2, which every HDF5 library since 1.8 reads.
 
-**Changing the schema.** Edit `icoschema/schema/linkml/dataset.yaml`, run `just generate`, then `just test-rust`. The
-Rust side cannot silently fall behind:
+**Changing the schema.** Edit `icoschema/vN/schema/dataset.yaml`, run `just generate`, then `just test-rust`. (`gen-rust`
+cannot handle `designates_type`, so `scripts/generate.py` generates the Rust crate from a copy of the schema without
+that line; the Rust code does not use the designator.) The Rust side cannot silently fall behind:
 
 - a new or renamed *attribute* makes `rust/src/storage` fail to compile (every generated struct is built field by
   field), pointing at the code to extend;
 - a new *enum value* fails to compile too (the enum name tables match exhaustively);
-- a new *class* or *subclass* can compile fine, so `rust/tests/schema_coverage.rs` compares the schema with the
-  manifest in `rust/src/schema_support.rs` and fails naming the new element. Handle it, then list it there (as handled,
+- a new *class* or *subclass* can compile fine, so `rust/tests/schema_coverage.rs` (`schema_coverage_v2.rs`) compares the schema with the
+  manifest in `rust/src/vN/schema_support.rs` and fails naming the new element. Handle it, then list it there (as handled,
   or as unsupported with the reason, for things the file format has no place for such as `PolynomialConversion`).
 
-The Rust tests read fixtures in `rust/tests/fixtures` and compare every value with what the Python implementation reads
+The Rust tests of schema version 2 read the stored synthetic files of the Python package (`test/v2/data`, `rust/tests/v2.rs`)
+and the migration is tested on those of version 1 (`test/v1/data`, `rust/tests/migrate.rs`). The tests of version 1 read fixtures in
+`rust/tests/fixtures` and compare every value with what the Python implementation reads
 from the same files (`expected.json`, `reference.rs`), and what it reads after writing them again (`expected_roundtrip.json`,
 `writer.rs`). `rust/tests/interop.py` (part of `just test-rust`) goes the other way: Rust writes every fixture and the
-Python package, on libhdf5 through h5py, must read the same content. After changing the Python reader or writer, rebuild
+Python package, on libhdf5 through h5py, must read the same content; the same for the version 2 files, and Rust's migration of
+every version 1 file must read as Python's. After changing the Python reader or writer, rebuild
 the fixtures with `just rust-fixtures`.
 
 ## Schema

@@ -7,8 +7,8 @@ mod common;
 use std::path::PathBuf;
 
 use common::{check_bundle, expected, fixtures, load};
-use icoschema::schema as g;
-use icoschema::{DatasetBundle, Recording, Source};
+use icoschema::v1::schema as g;
+use icoschema::v1::{DatasetBundle, Recording, Source};
 
 /// A path no other test (they run in parallel) uses.
 fn temp(name: &str) -> PathBuf {

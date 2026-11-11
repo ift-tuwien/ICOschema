@@ -131,7 +131,8 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 name = "icoschema"
 version = "0.3.0"
 dependencies = [
- "icoschema-gen",
+ "icoschema-gen-v1",
+ "icoschema-gen-v2",
  "rust-hdf5",
  "serde_json",
  "serde_yml",
@@ -140,8 +141,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "icoschema-gen"
+name = "icoschema-gen-v1"
 version = "0.0.3"
+dependencies = [
+ "serde",
+ "serde-value",
+ "serde_path_to_error",
+ "serde_yml",
+]
+
+[[package]]
+name = "icoschema-gen-v2"
+version = "2.0.0"
 dependencies = [
  "serde",
  "serde-value",

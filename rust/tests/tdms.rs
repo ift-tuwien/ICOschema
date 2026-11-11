@@ -8,7 +8,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::close;
-use icoschema::{DatasetBundle, Source};
+use icoschema::v1::{DatasetBundle, Source};
 use serde_json::Value;
 
 fn fixtures() -> PathBuf {
@@ -202,7 +202,7 @@ fn an_empty_float_quality_channel_is_an_error_not_a_panic() {
 
 #[test]
 fn recording_from_tdms_is_the_bundles_recording() {
-    let recording = icoschema::Recording::from_tdms(&path("single_stu.tdms")).unwrap();
+    let recording = icoschema::v1::Recording::from_tdms(&path("single_stu.tdms")).unwrap();
     assert_eq!(recording.only_source().unwrap().name(), "source1");
 }
 

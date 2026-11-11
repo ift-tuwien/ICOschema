@@ -22,7 +22,7 @@ check: setup
 test: check
 	uv run pytest
 
-# Regenerate the Python and Rust code from the LinkML schema (icoschema/schema/linkml/dataset.yaml)
+# Regenerate the Python and Rust code from the LinkML schema (icoschema/v*/schema/dataset.yaml)
 [group('schema')]
 generate: setup
 	uv run python scripts/generate.py

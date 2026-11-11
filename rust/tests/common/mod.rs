@@ -3,8 +3,8 @@
 
 use std::path::PathBuf;
 
-use icoschema::schema as g;
-use icoschema::{DatasetBundle, Source};
+use icoschema::v1::schema as g;
+use icoschema::v1::{DatasetBundle, Source};
 use serde_json::Value;
 
 pub fn fixtures() -> PathBuf {
@@ -153,7 +153,7 @@ fn check_source(name: &str, r: &Source, want: &Value) {
     outcome(r.filled_mask(), &want["filled"], |g, w| {
         assert_eq!(g.iter().filter(|m| **m).count() as i64, *w, "{name} filled")
     });
-    let freq = |res: icoschema::Result<(f64, icoschema::model::FrequencySource)>, w: &Value, what: &str| {
+    let freq = |res: icoschema::Result<(f64, icoschema::v1::model::FrequencySource)>, w: &Value, what: &str| {
         outcome(res, w, |(hz, src), w| {
             assert!(close(hz, w[0].as_f64().unwrap()), "{name} {what} hz");
             assert_eq!(format!("{src:?}").to_lowercase(), w[1].as_str().unwrap(), "{name} {what} source");

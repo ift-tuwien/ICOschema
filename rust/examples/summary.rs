@@ -1,4 +1,4 @@
-use icoschema::DatasetBundle;
+use icoschema::v1::DatasetBundle;
 use std::time::Instant;
 
 fn main() -> icoschema::Result<()> {

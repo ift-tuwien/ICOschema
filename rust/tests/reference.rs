@@ -4,7 +4,7 @@
 mod common;
 
 use common::{check_bundle, expected, fixtures, load};
-use icoschema::DatasetBundle;
+use icoschema::v1::DatasetBundle;
 use serde_json::Value;
 
 fn check(name: &str, want: &Value) {

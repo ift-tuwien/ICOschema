@@ -1,15 +1,15 @@
 //! Fails when `dataset.yaml` has something the Rust port has not been taught about
-//! (see `icoschema::schema_support`). This is the check behind
+//! (see `icoschema::v1::schema_support`). This is the check behind
 //! "change the LinkML schema -> `just generate` -> the build / tests complain".
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use icoschema::schema_support::{CLASSES, ENUMS};
+use icoschema::v1::schema_support::{CLASSES, ENUMS};
 use serde_yml::Value;
 
 fn schema_text() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../icoschema/schema/linkml/dataset.yaml");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../icoschema/v1/schema/dataset.yaml");
     // Checked out with CRLF line endings on Windows; the edits below assume LF.
     std::fs::read_to_string(path).unwrap().replace("\r\n", "\n")
 }

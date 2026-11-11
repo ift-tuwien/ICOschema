@@ -7,8 +7,8 @@ mod common;
 use std::path::PathBuf;
 
 use common::{fixtures, load};
-use icoschema::schema as g;
-use icoschema::{DatasetBundle, Recording, Source};
+use icoschema::v1::schema as g;
+use icoschema::v1::{DatasetBundle, Recording, Source};
 
 fn temp(name: &str) -> PathBuf {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -181,7 +181,7 @@ fn a_source_without_counter_is_a_gap_free_grid_with_its_own_rate() {
     assert_eq!(source.sample_index().unwrap(), [0, 1, 2, 3]);
     assert_eq!(source.filled_mask().unwrap(), [false; 4]);
     assert_eq!(source.channel_sampling_frequency().unwrap().0, 1000.0);
-    assert_eq!(source.total_sampling_frequency().unwrap(), (1000.0, icoschema::model::FrequencySource::Hardware));
+    assert_eq!(source.total_sampling_frequency().unwrap(), (1000.0, icoschema::v1::model::FrequencySource::Hardware));
     // no rows at all is still an error
     let empty = Source::from(base("e", None, 0));
     assert!(empty.rows_per_packet().unwrap_err().to_string().contains("empty counter"));
@@ -211,7 +211,7 @@ fn files_saved_with_the_old_tdms_json_still_report_rate_and_loss() {
         "{\"tdms\": {\"sampling_frequency\": 5000.0, \"signal_loss_percentage\": 2.5, \"signal_loss_measured\": true}, \"x\": 1}".into(),
     );
     let source = Source::from(source);
-    assert_eq!(source.channel_sampling_frequency().unwrap(), (5000.0, icoschema::model::FrequencySource::Hardware));
+    assert_eq!(source.channel_sampling_frequency().unwrap(), (5000.0, icoschema::v1::model::FrequencySource::Hardware));
     assert_eq!((source.signal_loss_percentage(), source.signal_loss_measured()), (2.5, true));
     let mut plain = packet("source1", None, 4);
     plain.recording_metadata.post_metadata = Some("not json".into());
@@ -325,8 +325,8 @@ fn files_read_without_provenance_attributes_are_hdf5_of_their_version() {
 fn a_writer_refuses_duplicate_or_unusable_source_names() {
     // the recording type cannot be built with them, but the generated one can
     let sources = vec![packet("a", None, 3), packet("a", None, 3)];
-    let result = icoschema::storage::write::save(
-        icoschema::storage::write::Parts {
+    let result = icoschema::v1::storage::write::save(
+        icoschema::v1::storage::write::Parts {
             sources: sources.iter().collect(),
             preprocessed: vec![],
             computations: &Default::default(),

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from icoschema import DatasetBundle
+from icoschema.v1 import DatasetBundle
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test"))

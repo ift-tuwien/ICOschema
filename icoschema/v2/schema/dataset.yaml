@@ -1,0 +1,576 @@
+name: dataset
+id: dataset_schema
+version: 2.0.0
+description: >-
+  Schema for a recording, its derived computations, and the bundle that
+  combines them.
+imports:
+  - linkml:types
+prefixes:
+  dataset: https://example.org/dataset/
+  linkml: https://w3id.org/linkml/
+default_prefix: dataset
+default_range: string
+
+classes:
+  RecordingMetadata:
+    description: >-
+      Metadata for a recording.
+    attributes:
+      start_time:
+        range: string
+        description: >-
+          Timestamp since UNIX epoch in ISO 8601 format without timezone.
+      pre_metadata:
+        range: string
+        description: >-
+          Opaque (JSON-encoded) metadata recorded before the measurement
+          (e.g. tool, workpiece and process parameters). Stored and
+          round-tripped as is, never parsed.
+      post_metadata:
+        range: string
+        description: >-
+          Opaque (JSON-encoded) metadata recorded after the measurement
+          (e.g. tool-wear/breakage labels). Stored and round-tripped as is,
+          never parsed.
+
+  HardwareMetadata:
+    description: >-
+      Metadata containing information about the hardware used to perform the recording.
+    attributes:
+      revision:
+      adc_reference_voltage:
+      adc_prescaler:
+        range: integer
+        description: >-
+          ADC prescaler setting. Together with adc_acquisition_time and
+          adc_oversample_rate it determines the total sampling frequency;
+          either all three are known or none.
+      adc_acquisition_time:
+        range: integer
+        description: >-
+          ADC acquisition time setting (see adc_prescaler).
+      adc_oversample_rate:
+        range: integer
+        description: >-
+          ADC oversample rate setting (see adc_prescaler).
+      channel1_metadata:
+        range: ChannelMetadata
+        required: true
+        description: >-
+          Sensor/conversion metadata for RecordingData.channel1.
+      channel2_metadata:
+        range: ChannelMetadata
+        description: >-
+          Sensor/conversion metadata for RecordingData.channel2, if present.
+      channel3_metadata:
+        range: ChannelMetadata
+        description: >-
+          Sensor/conversion metadata for RecordingData.channel3, if present.
+
+  ChannelMetadata:
+    description: >-
+      Metadata describing a single sensor channel: which physical sensor
+      produced it, and the conversion that takes its RecordingData values to
+      a value in sensor.unit.
+    attributes:
+      sensor:
+        range: Sensor
+        required: true
+        description: >-
+          The physical sensor that produced this channel's data.
+      conversion:
+        range: Conversion
+        required: true
+        description: >-
+          How this channel's RecordingData values relate to sensor.unit: see
+          the subclasses of Conversion.
+
+  Sensor:
+    description: >-
+      A physical sensor device that can produce channel data.
+    attributes:
+      sensor_id:
+        range: string
+        description: >-
+          Unique identifier of this sensor instance.
+      sensor_type:
+        range: string
+        description: >-
+          Sensor model/part number (e.g. "ADXL1001").
+      name:
+        range: string
+        description: >-
+          Human-readable label for the sensor.
+      unit:
+        range: string
+        description: >-
+          Physical unit the sensor measures in (e.g. "g", "V", "Pa").
+      dimension:
+        range: string
+        description: >-
+          Physical dimension/quantity measured (e.g. "acceleration", "voltage", "pressure").
+
+  Conversion:
+    abstract: true
+    description: >-
+      How a channel's RecordingData values relate to the physical unit of its
+      associated Sensor. Concrete conversions are represented by subclasses,
+      each declaring the parameters its kind of conversion needs.
+    attributes:
+      conversion_type:
+        range: string
+        designates_type: true
+        description: >-
+          The name of the conversion's class ("NoConversion",
+          "LinearConversion"), set automatically. Tells the kinds apart where
+          a Conversion is stored without its class (and keeps a conversion
+          without parameters from being an empty, hence missing, value).
+
+  NoConversion:
+    is_a: Conversion
+    description: >-
+      No conversion is defined: the channel's values are raw voltage values.
+
+  LinearConversion:
+    is_a: Conversion
+    description: >-
+      A linear conversion: converted = raw * gain + offset, with converted in
+      the unit of the channel's Sensor.
+    attributes:
+      gain:
+        range: float
+        required: true
+        description: >-
+          Multiplicative factor.
+      offset:
+        range: float
+        required: true
+        description: >-
+          Additive offset.
+
+  RecordingData:
+    description: >-
+      Columnar data from a recording. Each attribute is an array of per-sample
+      values; arrays are aligned by index (the i-th entry of every column
+      belongs to the same sample), regardless of how a given adapter stores or
+      retrieves them (e.g. an HDF5 table with one column per attribute, or a
+      database query result assembled into these arrays).
+    attributes:
+      timestamp:
+        range: integer
+        multivalued: true
+        required: true
+        description: >-
+          Per-sample timestamps, in microseconds since RecordingMetadata.start_time.
+      counter:
+        range: integer
+        multivalued: true
+        required: false
+        description: >-
+          Per-sample packet counter values, used to detect lost packets.
+          Absent for sources that have no packet counter (e.g. read from a
+          TDMS file): the rows are then a gap-free grid and packet loss is
+          reported by Source.quality instead.
+      channel1:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          Sensor channel 1 data.
+      channel2:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          Sensor channel 2 data.
+      channel3:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          Sensor channel 3 data.
+
+  Source:
+    description: >-
+      The data of one acquisition source, i.e. one STU/STH combination: its
+      hardware/sensor metadata and its per-sample data. Sources are
+      independent -- each has its own clock (RecordingMetadata.start_time),
+      packet counter, ADC settings (hence its own sampling frequency) and
+      sensors -- so sources of one Recording may differ in all of these.
+    attributes:
+      name:
+        range: string
+        identifier: true
+        description: >-
+          Unique name of this source within its Recording. Must be a single
+          HDF5 path segment (non-empty, no "/", not starting with ".").
+      description:
+        range: string
+        description: >-
+          Free-text description of this source.
+      stu_mac:
+        range: string
+        description: >-
+          MAC address of the STU (stationary transceiver unit) of this
+          source's STU/STH combination.
+      sth_mac:
+        range: string
+        description: >-
+          MAC address of the STH (sensory tool holder) of this source's
+          STU/STH combination.
+      sampling_frequency:
+        range: float
+        description: >-
+          Per-channel sampling frequency in Hz, if the source's own data says
+          so (a TDMS file's 1 / wf_increment). When set it is binding; without
+          it the frequency follows from HardwareMetadata's ADC settings.
+      quality:
+        range: QualityChannel
+        description: >-
+          The signal quality reported alongside this source's data, if any
+          (a TDMS file's signalQuality channel). Kept with the source it
+          belongs to, at its own sampling frequency.
+      additional_data:
+        range: string
+        description: >-
+          Opaque (JSON-encoded) data the reader found next to this source's
+          data and has no field for (e.g. the properties of a TDMS file, group
+          and channels). Stored and round-tripped as is, never parsed.
+      hardware_metadata:
+        range: HardwareMetadata
+        required: true
+      recording_metadata:
+        range: RecordingMetadata
+        required: true
+        description: >-
+          Metadata of this source's recording. Timestamps of this source's
+          RecordingData are relative to its start_time; start times of
+          different sources are not synchronized.
+      recording_data:
+        range: RecordingData
+        required: true
+
+  QualityChannel:
+    description: >-
+      A signal-quality series of one source: percentages, 100 meaning nothing
+      was lost. Sampled independently of the source's channels.
+    attributes:
+      values:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          Quality in percent per sample, 100 = no loss.
+      sampling_frequency:
+        range: float
+        description: >-
+          Sampling frequency of `values` in Hz, if known.
+
+  Recording:
+    description: >-
+      A complete recording: one or more independent Sources, each with its
+      hardware/metadata plus per-sample sensor data.
+    attributes:
+      sources:
+        range: Source
+        multivalued: true
+        required: true
+        inlined: true
+        description: >-
+          The recording's sources (at least one), keyed by Source.name.
+
+  PreprocessedRecording:
+    description: >-
+      The raw RecordingData channels placed on the gap-free sample grid
+      (lost packets filled) with timestamps rebased to 1 / sampling
+      frequency. Row j is grid position j, where position 0 is the first
+      received raw row. Channel values are copied from RecordingData as
+      stored, whatever their conversions say: they share the Recording's
+      HardwareMetadata (sensors, conversions) and mean exactly what the raw
+      channels mean. Built from one Source of the Recording.
+    attributes:
+      timestamp:
+        range: integer
+        multivalued: true
+        required: true
+        description: >-
+          Per-row timestamps in microseconds since
+          RecordingMetadata.start_time:
+          first raw timestamp + round(j * 1e6 / channel_sampling_frequency).
+          Never derive the sampling frequency from timestamp differences --
+          use channel_sampling_frequency.
+      channel1:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          RecordingData.channel1 on the gap-free grid.
+      channel2:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          RecordingData.channel2 on the gap-free grid, if present.
+      channel3:
+        range: float
+        multivalued: true
+        required: false
+        description: >-
+          RecordingData.channel3 on the gap-free grid, if present.
+      channel_sampling_frequency:
+        range: float
+        required: true
+        description: >-
+          Per-channel sampling frequency in Hz (the total ADC rate divided by
+          the number of channels) used to build `timestamp`. Binding for
+          everything time-related computed from this recording.
+      sampling_frequency_source:
+        range: SamplingFrequencySource
+        required: true
+        description: >-
+          Where channel_sampling_frequency came from.
+      fill_method:
+        range: string
+        required: true
+        description: >-
+          How lost samples were filled (e.g. "forward_fill"). The vocabulary
+          is owned by the producer.
+      producer:
+        range: string
+        required: true
+        description: >-
+          Free text identifying what produced this table (e.g.
+          "icocompute@0.2.0").
+      source:
+        range: string
+        description: >-
+          Name of the Source this table was built from. May be left out when
+          the recording has exactly one source; a DatasetBundle always
+          records it.
+
+  DerivedDataset:
+    description: >-
+      One named, computed array derived from a Recording, plus the
+      description of how it was produced.
+    attributes:
+      key:
+        range: string
+        identifier: true
+        description: >-
+          Hierarchical, path-like key identifying this computation within
+          its DatasetBundle (e.g. "wavelet_coefficients/channel1/details").
+          Assigned by the producing engine, never authored by hand.
+      values:
+        range: float
+        multivalued: true
+        required: true
+        description: >-
+          The computed array's values, flattened. The LinkML/Python level
+          has no native N-D array type; the on-disk (HDF5) representation
+          stores this in its true native shape instead.
+      shape:
+        range: integer
+        multivalued: true
+        required: true
+        description: >-
+          The array's true N-D shape, e.g. [2, 4096] -- needed to
+          reconstruct the array from the flattened `values`.
+      dtype:
+        range: string
+        required: true
+        description: >-
+          The array's numpy dtype name (e.g. "float64").
+      unit:
+        range: string
+        description: >-
+          Physical unit of the computed values, if applicable.
+      produced_by:
+        range: string
+        description: >-
+          Free-text identifying the algorithm that produced this dataset
+          (e.g. "wavelet_transform@1.0.0") -- not a hard reference to any
+          particular registry.
+      produced_at:
+        range: string
+        description: >-
+          Timestamp since UNIX epoch in ISO 8601 format without timezone,
+          recording when this dataset was produced.
+      params:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) algorithm parameters used to produce
+          this dataset.
+      description:
+        range: string
+        description: >-
+          Free-text description of this computation.
+
+  ComputationStep:
+    description: >-
+      The record of one computation step that produced (or failed to
+      produce) DerivedDatasets in a bundle: what ran, with which parameters,
+      in which order, and which computations it wrote. Generic provenance --
+      how producers name steps or derive keys from them is up to them.
+    attributes:
+      node:
+        range: string
+        identifier: true
+        description: >-
+          The step's unique name within its bundle. Must be a single HDF5
+          path segment (non-empty, no "/", not starting with ".").
+      step_index:
+        range: integer
+        required: true
+        description: >-
+          Execution order, 0-based and consecutive. Assigned by
+          DatasetBundle.with_step, never by hand.
+      producer:
+        range: string
+        required: true
+        description: >-
+          Free text identifying what ran (e.g. "rms@1.0.0"), like
+          DerivedDataset.produced_by. Its format is owned by the producer.
+      params:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) parameters as requested.
+      resolved_params:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) parameter values actually used, where
+          they differ from or complete `params` (e.g. a resolved default).
+      inputs:
+        range: string
+        multivalued: true
+        description: >-
+          Names (see `source_node`) of everything this step read from, for a
+          step with several inputs, e.g. two Sources.
+          Informational; `source_node` is the main one.
+      status:
+        range: ComputationStatus
+        description: >-
+          Whether the step succeeded.
+      error:
+        range: string
+        description: >-
+          The error message, for a failed step.
+      summary:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) short summary of the step's result.
+      output_keys:
+        range: string
+        multivalued: true
+        description: >-
+          The DatasetBundle.computations keys this step wrote. Authoritative:
+          it is what links a step to its data.
+      started_at:
+        range: string
+        description: >-
+          Timestamp since UNIX epoch in ISO 8601 format without timezone,
+          when the step started.
+      duration_s:
+        range: float
+        description: >-
+          How long the step ran, in seconds.
+      environment:
+        range: string
+        description: >-
+          Opaque (e.g. JSON-encoded) description of the software the step ran
+          with (e.g. library versions).
+      source_node:
+        range: string
+        description: >-
+          Where the step read its data from, one name in a single namespace:
+          a Source name (its raw recording), "preprocessed" (the preprocessed
+          table of a single-source recording), "preprocessed:<source>" (the
+          preprocessed table of that source), or the `node` of an earlier step
+          (reading that step's computations). Unset means the raw recording
+          of a single-source recording. Source names and step nodes must not
+          collide with each other or with the reserved "preprocessed" names.
+          Whether a step node exists is not checked -- the step it names may
+          have failed or been skipped without being recorded.
+
+  Provenance:
+    description: >-
+      Where a DatasetBundle was read from and by what it was written.
+    attributes:
+      source_format:
+        range: string
+        description: >-
+          Format the data was originally read from ("tdms", "hdf5"); kept
+          when the bundle is saved to HDF5 and read back.
+      source_format_version:
+        range: string
+        description: >-
+          Version of that format ("legacy" for files that predate versioning).
+      reader:
+        range: string
+        description: >-
+          The software that read the data from that format, as
+          "<name> <version>".
+      writer:
+        range: string
+        description: >-
+          The software that wrote the HDF5 file the bundle was read from, as
+          "<name> <version>". Set on writing.
+
+  DatasetBundle:
+    description: >-
+      A Recording together with its optional PreprocessedRecordings (at most
+      one per source), every DerivedDataset computed from them, and the
+      ComputationSteps that produced them.
+    attributes:
+      recording:
+        range: Recording
+        required: true
+      provenance:
+        range: Provenance
+        description: >-
+          Where the bundle was read from and by what it was written; absent
+          for a bundle built in memory.
+      preprocessed_tables:
+        range: PreprocessedRecording
+        multivalued: true
+        inlined_as_list: true
+        description: >-
+          Each preprocessed source of `recording` on its gap-free grid with
+          rebased timestamps, one table per source, identified by
+          PreprocessedRecording.source.
+      computations:
+        range: DerivedDataset
+        multivalued: true
+        inlined: true
+        description: >-
+          Every DerivedDataset computed from `recording`, keyed by
+          DerivedDataset.key.
+      steps:
+        range: ComputationStep
+        multivalued: true
+        inlined_as_list: true
+        description: >-
+          The steps that produced `computations`, ordered by step_index.
+          Computations no step lists in its output_keys are "unmanaged".
+
+enums:
+  ComputationStatus:
+    description: >-
+      Whether a ComputationStep succeeded.
+    permissible_values:
+      ok:
+        description: The step ran and wrote its output_keys.
+      error:
+        description: The step raised; see ComputationStep.error.
+  SamplingFrequencySource:
+    description: >-
+      Where a per-channel sampling frequency came from.
+    permissible_values:
+      override:
+        description: Given explicitly by whoever produced the data.
+      hardware:
+        description: Computed from the ADC settings recorded in HardwareMetadata.
+      default:
+        description: >-
+          Computed from the default ADC settings, because the recording
+          doesn't record its own.

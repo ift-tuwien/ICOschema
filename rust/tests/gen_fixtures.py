@@ -12,8 +12,8 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from icoschema import DatasetBundle
-from icoschema.schema.generated.python import dataset as g
+from icoschema.v1 import DatasetBundle
+from icoschema.v1.schema.generated import dataset as g
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent / "fixtures"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -140,7 +140,7 @@ write(OUT / "err_unconverted_no_sensors.h5", table(counter_steps(1, 10), 1), att
 
 
 # 10. several sources (1.3), waveform sources without a packet counter (1.4), the pre-1.4 TDMS JSON
-from icoschema import Recording
+from icoschema.v1 import Recording
 
 
 def meta(i, unit="g", name=None):

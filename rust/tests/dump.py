@@ -6,7 +6,7 @@ Sources and preprocessed tables are lists (in source order), since JSON objects 
 
 import json
 
-from icoschema import DatasetBundle
+from icoschema.v1 import DatasetBundle
 
 
 def comp(c):

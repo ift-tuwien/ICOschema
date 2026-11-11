@@ -6,7 +6,8 @@ description = "Rust port of ICOschema: generated schema types, a model API and a
 publish = false
 
 [dependencies]
-icoschema-gen = { path = "../icoschema/schema/generated/rust", default-features = false }
+icoschema-gen-v1 = { path = "../icoschema/v1/schema/generated/rust", default-features = false }
+icoschema-gen-v2 = { path = "../icoschema/v2/schema/generated/rust", default-features = false }
 rust-hdf5 = "0.7"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
