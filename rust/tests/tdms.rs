@@ -1,4 +1,4 @@
-//! The TDMS reader against what the Python icoschema (nptdms) reads from the same files
+//! The TDMS reader against what the Python icoschema (tdmspy) reads from the same files
 //! (`tests/gen_tdms_fixtures.py` builds the fixtures and `expected_tdms.json`), plus what is
 //! specific to the Rust reader.
 #![cfg(feature = "tdms")]
@@ -193,7 +193,7 @@ fn from_file_reads_tdms_by_content_and_the_result_saves_as_hdf5() {
 
 #[test]
 fn an_empty_float_quality_channel_is_an_error_not_a_panic() {
-    // nptdms reads this file (a quality channel that holds no values); the tedium crate divides by
+    // tdmspy reads this file (a quality channel that holds no values); the tedium crate divides by
     // zero on it. The acquisition software writes its empty quality channels void-typed (see
     // `the_real_two_stu_file...`), which works.
     let error = DatasetBundle::from_tdms(&path("single_stu_empty_quality.tdms")).unwrap_err().to_string();
@@ -208,7 +208,7 @@ fn recording_from_tdms_is_the_bundles_recording() {
 
 #[test]
 fn scale_types_the_reader_cannot_apply_are_refused_not_ignored() {
-    // nptdms applies RTD scaling; this reader says so instead of returning unscaled numbers
+    // like tdmspy, this reader refuses RTD scaling instead of returning unscaled numbers
     let mut bytes = std::fs::read(path("scaled_linear.tdms")).unwrap();
     let kind = b"Linear";
     for at in 0..bytes.len() - kind.len() {

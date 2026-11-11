@@ -2,7 +2,7 @@
 
     uv run python rust/tests/gen_tdms_fixtures.py          # from the repository root
 
-The files are written with nptdms (the layouts of the real examples: one STU with a `system` group,
+The files are written with the test writer `test/tdms_writer.py` (the layouts of the real examples: one STU with a `system` group,
 several STUs with a quality group each, scaled channels, several segments) plus the real
 `test/test_dual_stu.tdms`. expected_tdms.json is what the Rust reader must reproduce: for every
 source its rate, quality, start time, properties, loss, and a length and FNV-1a hash of its
@@ -18,11 +18,13 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-from nptdms import ChannelObject, GroupObject, RootObject, TdmsWriter
 
 from icoschema import DatasetBundle
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1] / "test"))
+from tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
+
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "fixtures" / "tdms"
 OUT.mkdir(parents=True, exist_ok=True)
 

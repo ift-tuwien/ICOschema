@@ -3,7 +3,7 @@
 //!
 //! - the `rawdata` group's channels (1 to 3, file order) become `channel1..3`, values scaled by
 //!   the channel's NI scaling if it has one (linear and polynomial scales; other scale types are
-//!   an error here, where nptdms would apply them), so they are already in `unit_string`
+//!   an error, as in `tdmspy`), so they are already in `unit_string`
 //!   (`NoConversion`); the channels of a source must have the same length;
 //! - the sampling frequency is `1 / wf_increment` (the channels must agree), the source has no
 //!   packet counter and its timestamps are `round(i * 1e6 / fs)`;
@@ -286,8 +286,8 @@ fn integer(value: &PropertyValue) -> Option<i64> {
     })
 }
 
-/// A TDMS timestamp as microseconds since the Unix epoch, like nptdms'
-/// `as_datetime64("us")`: the fraction (units of 2^-64 s) is truncated to whole microseconds.
+/// A TDMS timestamp as microseconds since the Unix epoch, like tdmspy's
+/// `to_datetime64("us")`: the fraction (units of 2^-64 s) is truncated to whole microseconds.
 fn timestamp_micros(seconds: i64, fractions: u64) -> i64 {
     let micros = (fractions as f64 / (18_446_744_073_709_551_616.0_f64 / 1e6)) as i64;
     (seconds - UNIX_EPOCH_IN_TDMS_SECONDS) * 1_000_000 + micros
@@ -373,7 +373,7 @@ impl Tdms {
         self.file.channel_length(&ChannelPath::new(group, channel)).unwrap_or(0) as usize
     }
 
-    /// The channel's values as f64, with its NI scaling applied, like nptdms' `channel[:]`.
+    /// The channel's values as f64, with its NI scaling applied, like `tdmspy`'s `channel.read()`.
     fn read(&mut self, group: &str, channel: &str) -> Result<Vec<f64>> {
         let path = ChannelPath::new(group, channel);
         let length = self.length(group, channel);
@@ -394,7 +394,6 @@ impl Tdms {
                 raw.into_iter().map(|v| v as f64).collect::<Vec<f64>>()
             }};
         }
-        let mut single = false;
         let values = match stored {
             DataType::I8 => read_as!(i8),
             DataType::I16 => read_as!(i16),
@@ -404,16 +403,13 @@ impl Tdms {
             DataType::U16 => read_as!(u16),
             DataType::U32 => read_as!(u32),
             DataType::U64 => read_as!(u64),
-            DataType::SingleFloat => {
-                single = true;
-                read_as!(f32)
-            }
+            DataType::SingleFloat => read_as!(f32),
             DataType::DoubleFloat => read_as!(f64),
             other => return invalid(format!("channel {group}/{channel} has the unsupported data type {other:?}")),
         };
         let properties = self.channel_properties(group, channel);
         let group_properties = self.group_properties(group);
-        scaled(values, single, &properties, &group_properties, &self.root)
+        scaled(values, &properties, &group_properties, &self.root)
     }
 }
 
@@ -437,12 +433,11 @@ fn scales_of(properties: &Properties) -> Option<usize> {
 
 fn scaled(
     raw: Vec<f64>,
-    single: bool,
     channel: &Properties,
     group: &Properties,
     file: &Properties,
 ) -> Result<Vec<f64>> {
-    // The first of channel, group and file that declares scales applies, like nptdms.
+    // The first of channel, group and file that declares scales applies, like tdmspy.
     let Some((properties, count)) = [channel, group, file].into_iter().find_map(|p| scales_of(p).map(|n| (p, n))) else {
         return Ok(raw);
     };
@@ -460,7 +455,6 @@ fn scaled(
     fn compute(
         index: i64,
         raw: &[f64],
-        single: bool,
         count: usize,
         properties: &Properties,
         number: &dyn Fn(String) -> Result<f64>,
@@ -481,19 +475,14 @@ fn scaled(
         match kind {
             "Linear" => {
                 let source = input_source(scale, "Linear");
-                let input = compute(source, raw, single, count, properties, number, input_source, depth + 1)?;
+                let input = compute(source, raw, count, properties, number, input_source, depth + 1)?;
                 let slope = number(format!("NI_Scale[{scale}]_Linear_Slope"))?;
                 let intercept = number(format!("NI_Scale[{scale}]_Linear_Y_Intercept"))?;
-                // numpy keeps single precision data in single precision with a Python float
-                Ok(if single && source == RAW_DATA_INPUT_SOURCE {
-                    input.into_iter().map(|v| f64::from((v as f32) * (slope as f32) + (intercept as f32))).collect()
-                } else {
-                    input.into_iter().map(|v| v * slope + intercept).collect()
-                })
+                Ok(input.into_iter().map(|v| v * slope + intercept).collect())
             }
             "Polynomial" => {
                 let source = input_source(scale, "Polynomial");
-                let input = compute(source, raw, single, count, properties, number, input_source, depth + 1)?;
+                let input = compute(source, raw, count, properties, number, input_source, depth + 1)?;
                 let size = properties
                     .get(&format!("NI_Scale[{scale}]_Polynomial_Coefficients_Size"))
                     .and_then(integer)
@@ -507,7 +496,7 @@ fn scaled(
             other => invalid(format!("NI scale type {other:?} is not supported (only Linear and Polynomial)")),
         }
     }
-    compute(count as i64 - 1, &raw, single, count, properties, &number, &input_source, 0)
+    compute(count as i64 - 1, &raw, count, properties, &number, &input_source, 0)
 }
 
 // ── the legacy layout ───────────────────────────────────────────────────────

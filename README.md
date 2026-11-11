@@ -246,8 +246,8 @@ It reads all file format versions (legacy, 1.0 to 1.4) and writes 1.0 to 1.4 (se
 packet counter, `quality`, `additional_data`, provenance) like the Python package, and `DatasetBundle::from_file`
 tells HDF5 from TDMS by content. It reads TDMS files too (`DatasetBundle::from_tdms`, the legacy layout, with the
 [`tedium`](https://crates.io/crates/tedium) crate, behind the `tdms` feature, on by default). Where it differs
-from Python: NI scaling supports the `Linear` and `Polynomial` scale types (another type is an error, where nptdms
-applies it), polynomial scaling can differ from numpy's by one rounding step, a quality channel that is declared
+from Python: NI scaling supports the `Linear` and `Polynomial` scale types (another type is an error, as in
+`tdmspy`), a quality channel that is declared
 with a type but holds no values is an error (a `tedium` limitation: the acquisition software's void-typed empty
 channels work), and TDMS files that use DAQmx raw data are refused. Groups and channels keep their file order, which
 `tedium` does not, so the reader scans the segment headers for it.
