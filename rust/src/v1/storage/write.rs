@@ -1,5 +1,5 @@
 //! Writes the PyTables-style HDF5 layout of ICOschema, like `icoschema/v1/storage/hdf5.py`:
-//! the lowest format version that can hold the data ("1.0" recording, "1.1" with a preprocessed
+//! the format version asked for, or the lowest that can hold the data ("1.0" recording, "1.1" with a preprocessed
 //! table, "1.2" with steps, "1.3" with several sources, "1.4" if a source has no packet counter
 //! or has its own sampling frequency, quality or additional data), every dataset of more than one
 //! element chunked and compressed with gzip level 4 plus shuffle, computations under
@@ -41,11 +41,22 @@ pub struct Parts<'a> {
     pub computations: &'a HashMap<String, g::DerivedDataset>,
     pub steps: &'a [g::ComputationStep],
     pub provenance: Option<&'a g::Provenance>,
+    /// The format version to write: `None` for the oldest one that can hold the data. An error if the data does
+    /// not fit the requested one.
+    pub format_version: Option<&'a str>,
 }
 
 pub fn save_sources(sources: Vec<&g::Source>, path: &str) -> Result<()> {
+    save_sources_as(sources, path, None)
+}
+
+/// `save_sources` in the format version `format_version` (`None`: the oldest that fits).
+pub fn save_sources_as(sources: Vec<&g::Source>, path: &str, format_version: Option<&str>) -> Result<()> {
     let empty = HashMap::new();
-    save(Parts { sources, preprocessed: vec![], computations: &empty, steps: &[], provenance: None }, path)
+    save(
+        Parts { sources, preprocessed: vec![], computations: &empty, steps: &[], provenance: None, format_version },
+        path,
+    )
 }
 
 pub fn save(parts: Parts, path: &str) -> Result<()> {
@@ -62,13 +73,99 @@ pub fn save(parts: Parts, path: &str) -> Result<()> {
     result
 }
 
-/// Whether a source needs format 1.4: no packet counter, or a sampling frequency, quality or
-/// additional data of its own.
-fn uses_source_features(source: &g::Source) -> bool {
-    source.sampling_frequency.is_some()
-        || source.quality.is_some()
-        || source.additional_data.is_some()
-        || source.recording_data.counter.as_deref().is_none_or(<[isize]>::is_empty)
+/// Where a format version keeps its sources.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    /// One source, its table at the root.
+    Root,
+    /// Always under `/sources/<name>/`, so several are possible.
+    Group,
+    /// At the root for one source, else under `/sources/`.
+    Either,
+}
+
+/// What a format version can hold: the writer needs nothing else.
+struct Spec {
+    version: &'static str,
+    /// An optional preprocessed table (1.1).
+    preprocessed: bool,
+    /// An optional `/steps/` group (1.2).
+    steps: bool,
+    layout: Layout,
+    /// Sources without a counter, or with a rate, quality or additional data (1.4).
+    source_features: bool,
+}
+
+/// The versions that can be written, in the order they appeared: the writer picks the first that fits.
+static WRITABLE: [Spec; 5] = [
+    Spec { version: "1.0", preprocessed: false, steps: false, layout: Layout::Root, source_features: false },
+    Spec { version: "1.1", preprocessed: true, steps: false, layout: Layout::Root, source_features: false },
+    Spec { version: "1.2", preprocessed: true, steps: true, layout: Layout::Root, source_features: false },
+    Spec { version: "1.3", preprocessed: true, steps: true, layout: Layout::Group, source_features: false },
+    Spec { version: "1.4", preprocessed: true, steps: true, layout: Layout::Either, source_features: true },
+];
+
+/// Every format version the writer can write, oldest first.
+pub fn writable_versions() -> Vec<&'static str> {
+    WRITABLE.iter().map(|spec| spec.version).collect()
+}
+
+/// What a source has that only a format with `source_features` can store.
+fn source_features(source: &g::Source) -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if source.recording_data.counter.as_deref().is_none_or(<[isize]>::is_empty) {
+        features.push("no packet counter");
+    }
+    if source.sampling_frequency.is_some() {
+        features.push("a sampling_frequency");
+    }
+    if source.quality.is_some() {
+        features.push("quality");
+    }
+    if source.additional_data.is_some() {
+        features.push("additional_data");
+    }
+    features
+}
+
+/// Why `spec` cannot hold the data (empty if it can).
+fn unrepresentable(parts: &Parts, spec: &Spec) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if !parts.preprocessed.is_empty() && !spec.preprocessed {
+        reasons.push("it has a preprocessed table".to_string());
+    }
+    if !parts.steps.is_empty() && !spec.steps {
+        reasons.push("it has computation steps".to_string());
+    }
+    if parts.sources.len() > 1 && spec.layout == Layout::Root {
+        reasons.push(format!("it has {} sources", parts.sources.len()));
+    }
+    if !spec.source_features {
+        for source in &parts.sources {
+            let features = source_features(source);
+            if !features.is_empty() {
+                reasons.push(format!("source {:?} has {}", source.name, features.join(", ")));
+            }
+        }
+    }
+    reasons
+}
+
+/// The format to write the data in: the requested version, or the oldest one that can hold it, so that files
+/// without the newer parts stay readable by older readers. An error if the version is unknown or cannot hold the
+/// data -- nothing is dropped silently.
+fn choose(parts: &Parts) -> Result<&'static Spec> {
+    let Some(requested) = parts.format_version else {
+        return Ok(WRITABLE.iter().find(|spec| unrepresentable(parts, spec).is_empty()).expect("1.4 holds everything"));
+    };
+    let Some(spec) = WRITABLE.iter().find(|spec| spec.version == requested) else {
+        return invalid(format!("cannot write format_version {requested:?}; writable versions: {:?}", writable_versions()));
+    };
+    let reasons = unrepresentable(parts, spec);
+    if !reasons.is_empty() {
+        return invalid(format!("cannot write format {requested:?}: {}", reasons.join("; ")));
+    }
+    Ok(spec)
 }
 
 fn write_file(parts: &Parts, path: &str) -> Result<()> {
@@ -86,24 +183,14 @@ fn write_file(parts: &Parts, path: &str) -> Result<()> {
         }
     }
 
+    let spec = choose(parts)?;
     let file = H5File::create(path)?;
     // Superblock 2 instead of the default 3: readable by every HDF5 since 1.8.
     file.set_libver_latest(false)?;
 
-    let multiple = parts.sources.len() > 1;
-    let features = parts.sources.iter().any(|s| uses_source_features(s));
-    let version = if features {
-        "1.4"
-    } else if multiple {
-        "1.3"
-    } else if !parts.steps.is_empty() {
-        "1.2"
-    } else if !parts.preprocessed.is_empty() {
-        "1.1"
-    } else {
-        "1.0"
-    };
-    file.set_attr_string("icoschema_format_version", version)?;
+    // a single source is at the root unless the format always keeps its sources in groups
+    let multiple = parts.sources.len() > 1 || spec.layout == Layout::Group;
+    file.set_attr_string("icoschema_format_version", spec.version)?;
     file.set_attr_string("primary_table", PRIMARY_TABLE)?;
     file.set_attr_string("writer", &super::software_id())?;
     if let Some(provenance) = parts.provenance {
@@ -123,10 +210,10 @@ fn write_file(parts: &Parts, path: &str) -> Result<()> {
         file.set_attr_string_array("sources", &names)?;
         let sources = file.create_group(SOURCES_GROUP)?;
         for source in &parts.sources {
-            write_source_table(&sources.create_group(&source.name)?, source, false, features)?;
+            write_source_table(&sources.create_group(&source.name)?, source, false, spec.source_features)?;
         }
     } else {
-        write_source_table(&root, parts.sources[0], true, features)?;
+        write_source_table(&root, parts.sources[0], true, spec.source_features)?;
     }
 
     if !parts.preprocessed.is_empty() {

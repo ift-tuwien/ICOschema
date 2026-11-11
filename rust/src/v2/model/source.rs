@@ -284,6 +284,12 @@ impl Source {
         }
     }
 
+    /// `recording_metadata.start_time` as a `DateTime` (like Python's `start_datetime`), `None` if the source has
+    /// none. Raises for a value that is not an ISO 8601 time.
+    pub fn start_datetime(&self) -> Result<Option<super::DateTime>> {
+        Ok(self.start_micros()?.map(super::DateTime::from_micros))
+    }
+
     pub fn summary(&self) -> Summary {
         let metadata = [
             Some(&self.0.hardware_metadata.channel1_metadata),
@@ -327,7 +333,7 @@ impl Source {
 
 /// `YYYY-MM-DD[(T| )HH:MM[:SS[.ffffff]]]` as microseconds since 1970-01-01 (digits of the
 /// fraction beyond the sixth are dropped).
-fn parse_micros(text: &str) -> Result<i64> {
+pub(super) fn parse_micros(text: &str) -> Result<i64> {
     let bad = || crate::Error::Invalid(format!("{text:?} is not an ISO 8601 time (YYYY-MM-DDTHH:MM:SS.ffffff)"));
     let (date, time) = match text.split_once(['T', ' ']) {
         Some((d, t)) => (d, Some(t)),

@@ -18,7 +18,9 @@ pub mod v2;
 
 // The latest schema version.
 pub use v2::model;
-pub use v2::{schema, schema_support, storage, DatasetBundle, PreprocessedRecording, Recording, Source};
+pub use v2::{
+    hdf5_format_versions, schema, schema_support, storage, DatasetBundle, OnError, PreprocessedRecording, Recording, Source,
+};
 
 pub use migrate::{read, schema_version_of_file};
 

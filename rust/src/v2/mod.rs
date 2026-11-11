@@ -11,3 +11,15 @@ pub mod schema_support;
 pub mod storage;
 
 pub use model::{DatasetBundle, PreprocessedRecording, Recording, Source};
+pub use storage::OnError;
+
+/// The HDF5 file format versions this schema version reads (one), or with
+/// `writable` the ones `to_hdf5_with(.., Some(version))` can write, oldest first. Like Python's
+/// `hdf5_format_versions(writable=...)`.
+pub fn hdf5_format_versions(writable: bool) -> Vec<&'static str> {
+    if writable {
+        storage::write::writable_versions()
+    } else {
+        storage::hdf5::readable_versions()
+    }
+}

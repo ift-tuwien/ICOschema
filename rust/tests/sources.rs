@@ -332,6 +332,7 @@ fn a_writer_refuses_duplicate_or_unusable_source_names() {
             computations: &Default::default(),
             steps: &[],
             provenance: None,
+            format_version: None,
         },
         path(&temp("dup.h5")),
     );

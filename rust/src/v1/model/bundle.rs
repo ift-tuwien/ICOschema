@@ -47,8 +47,25 @@ impl DatasetBundle {
         }
     }
 
+    /// Loads an HDF5 file. A malformed computation or step is skipped with a warning on standard error, like
+    /// Python's default `on_error="skip"`: see `from_hdf5_with` to fail instead.
     pub fn from_hdf5(path: &str) -> Result<Self> {
-        let loaded = storage::hdf5::load_dataset_bundle(path)?;
+        Self::from_hdf5_with(path, storage::OnError::Skip)
+    }
+
+    /// `from_hdf5` with `on_error` saying what to do with a malformed computation or step: skip it (with a warning
+    /// on standard error) or fail the read. A malformed source or preprocessed table always fails it.
+    pub fn from_hdf5_with(path: &str, on_error: storage::OnError) -> Result<Self> {
+        let (bundle, warnings) = Self::from_hdf5_with_warnings(path, on_error)?;
+        for warning in warnings {
+            eprintln!("warning: {path}: {warning}");
+        }
+        Ok(bundle)
+    }
+
+    /// `from_hdf5_with`, returning the warnings (what was skipped) instead of printing them.
+    pub fn from_hdf5_with_warnings(path: &str, on_error: storage::OnError) -> Result<(Self, Vec<String>)> {
+        let loaded = storage::hdf5::load_dataset_bundle(path, on_error)?;
         let mut bundle = Self::new(Recording::new(loaded.sources.into_iter().map(Source::from).collect())?);
         bundle.computations = loaded.computations;
         bundle.steps = loaded.steps;
@@ -57,7 +74,7 @@ impl DatasetBundle {
             // A preprocessed table that does not fit its source is primary data: never skipped.
             bundle = bundle.with_preprocessed(table, None)?;
         }
-        Ok(bundle)
+        Ok((bundle, loaded.warnings))
     }
 
     /// Loads a TDMS file (read-only; needs the `tdms` feature, on by default). The bundle holds
@@ -117,6 +134,12 @@ impl DatasetBundle {
 
     /// Writes the bundle to a fresh HDF5 file (see `storage::write` for the layout).
     pub fn to_hdf5(&self, path: &str) -> Result<()> {
+        self.to_hdf5_with(path, None)
+    }
+
+    /// `to_hdf5` in the format version `format_version` (`None`: the oldest that can hold the bundle). An error if
+    /// the bundle does not fit the version, or it is not one `hdf5_format_versions(true)` lists.
+    pub fn to_hdf5_with(&self, path: &str, format_version: Option<&str>) -> Result<()> {
         for table in &self.preprocessed_tables {
             let name = table.source.as_deref().unwrap_or_default();
             match self.recording.source(name) {
@@ -136,6 +159,7 @@ impl DatasetBundle {
                 computations: &self.computations,
                 steps: &self.steps,
                 provenance: self.provenance.as_ref(),
+                format_version,
             },
             path,
         )

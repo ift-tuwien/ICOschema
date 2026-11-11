@@ -44,6 +44,7 @@ test-rust: check-generated
 rust-fixtures: setup
 	uv run python rust/tests/gen_fixtures.py
 	uv run python rust/tests/gen_tdms_fixtures.py
+	uv run python rust/tests/gen_malformed_fixtures.py
 
 # Release new package version
 [group('release')]

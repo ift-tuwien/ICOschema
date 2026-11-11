@@ -20,10 +20,16 @@ use rust_hdf5::{DatatypeMessage, H5Dataset, H5File, H5Group};
 
 use super::table::Table;
 use super::vlen;
+use super::OnError;
 use crate::{invalid, Error, Result};
 
 pub(super) const FORMAT_VERSION: &str = "2.0";
 const SUPPORTED: [&str; 1] = [FORMAT_VERSION];
+
+/// Every format version this reader reads.
+pub fn readable_versions() -> Vec<&'static str> {
+    SUPPORTED.to_vec()
+}
 pub(super) const CONVERSION_NONE: &str = "none";
 pub(super) const CONVERSION_LINEAR: &str = "linear";
 pub(super) const DEFAULT_SOURCE_NAME: &str = "source1";
@@ -356,76 +362,117 @@ fn read_preprocessed(file: &H5File, prefix: &str, table_name: &str, source: &str
     })
 }
 
+/// One computation, `key` being its path below `/computations/`.
+fn read_derived(file: &H5File, budget: u64, key: &str) -> Result<g::DerivedDataset> {
+    let ds = file.dataset(&format!("computations/{key}"))?;
+    super::check_size(&ds, budget)?;
+    let shape = ds.shape();
+    let values = match ds.datatype()? {
+        DatatypeMessage::FloatingPoint { .. } => ds.read_numeric_as::<f64>()?,
+        // rust-hdf5 refuses a silent integer -> f64 read, so convert explicitly.
+        DatatypeMessage::FixedPoint { .. } => ds.read_numeric_as::<i64>()?.into_iter().map(|v| v as f64).collect(),
+        _ => return invalid(format!("computation {key:?} is not numeric")),
+    };
+    let dtype = match ds.datatype()? {
+        DatatypeMessage::FloatingPoint { size, .. } => format!("float{}", size * 8),
+        DatatypeMessage::FixedPoint { size, signed, .. } => format!("{}int{}", if signed { "" } else { "u" }, size * 8),
+        _ => unreachable!(),
+    };
+    Ok(g::DerivedDataset {
+        key: key.to_string(),
+        values,
+        shape: shape.into_iter().map(|d| d as isize).collect(),
+        dtype,
+        unit: opt_str(&ds, "unit")?,
+        produced_by: opt_str(&ds, "produced_by")?,
+        produced_at: opt_str(&ds, "produced_at")?,
+        params: opt_str(&ds, "params")?,
+        description: opt_str(&ds, "description")?,
+    })
+}
+
+/// Reads every computation below `group`. A malformed one is skipped with a warning, or an error with
+/// `OnError::Raise`.
 fn collect_computations(
     file: &H5File,
     budget: u64,
     group: &H5Group,
     prefix: &str,
+    on_error: OnError,
+    warnings: &mut Vec<String>,
     out: &mut HashMap<String, g::DerivedDataset>,
 ) -> Result<()> {
     for name in group.dataset_names()? {
         let key = format!("{prefix}{name}");
-        let ds = file.dataset(&format!("computations/{key}"))?;
-        super::check_size(&ds, budget)?;
-        let shape = ds.shape();
-        let values = match ds.datatype()? {
-            DatatypeMessage::FloatingPoint { .. } => ds.read_numeric_as::<f64>()?,
-            // rust-hdf5 refuses a silent integer -> f64 read, so convert explicitly.
-            DatatypeMessage::FixedPoint { .. } => {
-                ds.read_numeric_as::<i64>()?.into_iter().map(|v| v as f64).collect()
+        match read_derived(file, budget, &key) {
+            Ok(derived) => {
+                out.insert(key, derived);
             }
-            _ => return invalid(format!("computation {key:?} is not numeric")),
-        };
-        let dtype = match ds.datatype()? {
-            DatatypeMessage::FloatingPoint { size, .. } => format!("float{}", size * 8),
-            DatatypeMessage::FixedPoint { size, signed, .. } => format!("{}int{}", if signed { "" } else { "u" }, size * 8),
-            _ => unreachable!(),
-        };
-        out.insert(
-            key.clone(),
-            g::DerivedDataset {
-                key,
-                values,
-                shape: shape.into_iter().map(|d| d as isize).collect(),
-                dtype,
-                unit: opt_str(&ds, "unit")?,
-                produced_by: opt_str(&ds, "produced_by")?,
-                produced_at: opt_str(&ds, "produced_at")?,
-                params: opt_str(&ds, "params")?,
-                description: opt_str(&ds, "description")?,
-            },
-        );
+            Err(error) if on_error == OnError::Skip => {
+                warnings.push(format!("skipping malformed computation {key:?}: {error}"));
+            }
+            Err(error) => return Err(error),
+        }
     }
     for name in group.group_names()? {
-        collect_computations(file, budget, &group.group(&name)?, &format!("{prefix}{name}/"), out)?;
+        collect_computations(file, budget, &group.group(&name)?, &format!("{prefix}{name}/"), on_error, warnings, out)?;
     }
     Ok(())
 }
 
-fn steps_from(file: &H5File, path: &str) -> Result<Vec<g::ComputationStep>> {
+/// One step; an error if it is malformed or lists `output_keys` that are not in `computations` (e.g. because a
+/// malformed computation was skipped).
+fn read_step(
+    group: &H5Group,
+    path: &str,
+    node: &str,
+    computations: &HashMap<String, g::DerivedDataset>,
+) -> Result<g::ComputationStep> {
+    let step = group.group(node)?;
+    let status = opt_str(&step, "status")?.map(|v| parse_enum(&v, &STATUSES, status_name)).transpose()?;
+    let step_index = opt_int(&step, "step_index")?
+        .ok_or_else(|| Error::Invalid(format!("step {node:?} has no step_index")))?;
+    let output_keys = string_list(&step, path, "output_keys")?;
+    let missing: Vec<&String> =
+        output_keys.iter().flatten().filter(|key| !computations.contains_key(key.as_str())).collect();
+    if !missing.is_empty() {
+        return invalid(format!("step {node:?} lists output_keys missing from computations: {missing:?}"));
+    }
+    Ok(g::ComputationStep {
+        node: node.to_string(),
+        step_index,
+        producer: req_str(&step, "producer")?,
+        params: opt_str(&step, "params")?,
+        resolved_params: opt_str(&step, "resolved_params")?,
+        inputs: string_list(&step, path, "inputs")?,
+        status,
+        error: opt_str(&step, "error")?,
+        summary: opt_str(&step, "summary")?,
+        output_keys,
+        started_at: opt_str(&step, "started_at")?,
+        duration_s: opt_str(&step, "duration_s")?.and_then(|v| v.parse().ok()),
+        environment: opt_str(&step, "environment")?,
+        source_node: opt_str(&step, "source_node")?,
+    })
+}
+
+/// The steps of the file, ordered by `step_index` and renumbered 0, 1, 2, ... A malformed step is skipped with a
+/// warning, or an error with `OnError::Raise`.
+fn steps_from(
+    file: &H5File,
+    path: &str,
+    computations: &HashMap<String, g::DerivedDataset>,
+    on_error: OnError,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<g::ComputationStep>> {
     let Ok(group) = file.root_group().group("steps") else { return Ok(vec![]) };
     let mut steps = Vec::new();
     for node in group.group_names()? {
-        let step = group.group(&node)?;
-        let status = opt_str(&step, "status")?
-            .map(|v| parse_enum(&v, &STATUSES, status_name))
-            .transpose()?;
-        steps.push(g::ComputationStep {
-            node,
-            step_index: opt_int(&step, "step_index")?.unwrap_or(0),
-            producer: req_str(&step, "producer")?,
-            params: opt_str(&step, "params")?,
-            resolved_params: opt_str(&step, "resolved_params")?,
-            inputs: string_list(&step, path, "inputs")?,
-            status,
-            error: opt_str(&step, "error")?,
-            summary: opt_str(&step, "summary")?,
-            output_keys: string_list(&step, path, "output_keys")?,
-            started_at: opt_str(&step, "started_at")?,
-            duration_s: opt_str(&step, "duration_s")?.and_then(|v| v.parse().ok()),
-            environment: opt_str(&step, "environment")?,
-            source_node: opt_str(&step, "source_node")?,
-        });
+        match read_step(&group, path, &node, computations) {
+            Ok(step) => steps.push(step),
+            Err(error) if on_error == OnError::Skip => warnings.push(format!("skipping malformed step {node:?}: {error}")),
+            Err(error) => return Err(error),
+        }
     }
     steps.sort_by(|a, b| (a.step_index, &a.node).cmp(&(b.step_index, &b.node)));
     for (i, s) in steps.iter_mut().enumerate() {
@@ -441,23 +488,28 @@ pub struct Loaded {
     pub computations: HashMap<String, g::DerivedDataset>,
     pub steps: Vec<g::ComputationStep>,
     pub provenance: g::Provenance,
+    /// What was skipped (`OnError::Skip`).
+    pub warnings: Vec<String>,
 }
 
-pub fn load_dataset_bundle(path: &str) -> Result<Loaded> {
+pub fn load_dataset_bundle(path: &str, on_error: OnError) -> Result<Loaded> {
     let file = H5File::open(path)?;
     let budget = super::budget(path)?;
     let version = format_version(&file, path)?;
     let sources = sources_from(&file, path, budget)?;
+    let mut warnings = Vec::new();
     let mut computations = HashMap::new();
     if let Ok(group) = file.root_group().group("computations") {
-        collect_computations(&file, budget, &group, "", &mut computations)?;
+        collect_computations(&file, budget, &group, "", on_error, &mut warnings, &mut computations)?;
     }
+    let steps = steps_from(&file, path, &computations, on_error, &mut warnings)?;
     Ok(Loaded {
         preprocessed: preprocessed_from(&file, &sources, budget)?,
-        steps: steps_from(&file, path)?,
+        steps,
         provenance: provenance_from(&file, &version)?,
         sources,
         computations,
+        warnings,
     })
 }
 

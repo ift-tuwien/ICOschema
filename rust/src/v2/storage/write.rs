@@ -41,11 +41,26 @@ pub struct Parts<'a> {
     pub computations: &'a HashMap<String, g::DerivedDataset>,
     pub steps: &'a [g::ComputationStep],
     pub provenance: Option<&'a g::Provenance>,
+    /// The format version to write: `None` or `FORMAT_VERSION` (the only one). Anything else is an error.
+    pub format_version: Option<&'a str>,
+}
+
+/// Every format version the writer can write.
+pub fn writable_versions() -> Vec<&'static str> {
+    vec![FORMAT_VERSION]
 }
 
 pub fn save_sources(sources: Vec<&g::Source>, path: &str) -> Result<()> {
+    save_sources_as(sources, path, None)
+}
+
+/// `save_sources` in the format version `format_version` (`None`: the oldest that fits).
+pub fn save_sources_as(sources: Vec<&g::Source>, path: &str, format_version: Option<&str>) -> Result<()> {
     let empty = HashMap::new();
-    save(Parts { sources, preprocessed: vec![], computations: &empty, steps: &[], provenance: None }, path)
+    save(
+        Parts { sources, preprocessed: vec![], computations: &empty, steps: &[], provenance: None, format_version },
+        path,
+    )
 }
 
 pub fn save(parts: Parts, path: &str) -> Result<()> {
@@ -77,6 +92,9 @@ fn write_file(parts: &Parts, path: &str) -> Result<()> {
         }
     }
 
+    if let Some(requested) = parts.format_version.filter(|v| *v != FORMAT_VERSION) {
+        return invalid(format!("cannot write format_version {requested:?}; writable versions: {:?}", writable_versions()));
+    }
     let file = H5File::create(path)?;
     // Superblock 2 instead of the default 3: readable by every HDF5 since 1.8.
     file.set_libver_latest(false)?;

@@ -2,10 +2,12 @@
 //! methods (like `icoschema/v1/model`). `Source` and `PreprocessedRecording` deref to their
 //! generated types, so all schema fields stay reachable (`source.hardware_metadata`, ...).
 mod bundle;
+mod datetime;
 mod preprocessed;
 mod recording;
 mod source;
 
+pub use datetime::{Components, DateTime};
 pub use bundle::{validate_preprocessed, validate_steps, DatasetBundle, PREPROCESSED_NODE, PREPROCESSED_PREFIX};
 pub use preprocessed::PreprocessedRecording;
 pub use recording::Recording;

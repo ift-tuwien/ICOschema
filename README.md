@@ -289,6 +289,14 @@ Opening a file of any schema version as the latest one: `icoschema::read(path)` 
 `migrate::convert_file(old, new)` writes the result as a version 2 file), and `icoschema::schema_version_of_file(path)`
 tells the version of a file without reading its data.
 
+The rest of the Python API that has a Rust counterpart: `hdf5_format_versions(writable)` (per version module, and at the
+top level for the latest), `to_hdf5_with(path, Some("1.2"))` to write a chosen format version (an error if the data does
+not fit it; `to_hdf5(path)` picks the oldest that fits), `from_hdf5_with(path, OnError::Raise)` to fail on a malformed
+computation or step instead of skipping it with a warning (the default, as in Python; `from_hdf5_with_warnings` returns
+the warnings), and `Source::start_datetime()` / `Recording::earliest_start_datetime()` returning a `DateTime` (naive,
+microseconds, ordered, `Display` as ISO 8601, `components()`, `seconds_since`, `plus_seconds`). There is no
+`to_dataframe`: use `channel(n)` and the column getters.
+
 ```rust
 let bundle = icoschema::DatasetBundle::from_hdf5("some_file.hdf5")?;
 let source = bundle.recording.only_source()?;   // a recording has one or more sources

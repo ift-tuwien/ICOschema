@@ -52,7 +52,13 @@ impl Recording {
     /// Writes the recording alone to a fresh HDF5 file (format 2.0
     /// for any number of sources).
     pub fn to_hdf5(&self, path: &str) -> Result<()> {
-        storage::write::save_sources(self.sources.iter().map(|s| &**s).collect(), path)
+        self.to_hdf5_with(path, None)
+    }
+
+    /// `to_hdf5` in the format version `format_version` (`None`: the oldest that can hold the recording). An error
+    /// if the recording does not fit the version.
+    pub fn to_hdf5_with(&self, path: &str, format_version: Option<&str>) -> Result<()> {
+        storage::write::save_sources_as(self.sources.iter().map(|s| &**s).collect(), path, format_version)
     }
 
     /// The generated type (a map keyed by source name: the order is lost).
@@ -96,6 +102,11 @@ impl Recording {
             }
         }
         Ok(earliest)
+    }
+
+    /// `earliest_start` as a `DateTime` (like Python's `earliest_start`).
+    pub fn earliest_start_datetime(&self) -> Result<Option<super::DateTime>> {
+        Ok(self.earliest_start()?.map(super::DateTime::from_micros))
     }
 
     /// Each source's start in seconds after the earliest source's start (`0.0` for the earliest,

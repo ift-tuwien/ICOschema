@@ -8,6 +8,16 @@ pub mod write;
 
 use rust_hdf5::H5Dataset;
 
+/// What to do with a malformed computation or step when reading a file: skip it with a warning (the default, like
+/// Python's `on_error="skip"`) or fail the whole read (`on_error="raise"`). A malformed source or preprocessed table
+/// always fails the read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnError {
+    #[default]
+    Skip,
+    Raise,
+}
+
 use crate::{invalid, Result};
 
 /// A corrupt file can claim a dataset of terabytes and rust-hdf5 allocates it before reading.
