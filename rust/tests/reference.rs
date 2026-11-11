@@ -51,7 +51,14 @@ fixture_tests! {
 #[test]
 fn every_fixture_has_a_test() {
     let tested = 22;
-    let files = std::fs::read_dir(fixtures()).unwrap().filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "h5")).count();
+    // schema version 2 fixtures, tested in tests/features.rs (they have no expected values from Python here)
+    let elsewhere = ["malformed_computation.h5"];
+    let files = std::fs::read_dir(fixtures())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|x| x == "h5"))
+        .filter(|path| !elsewhere.contains(&path.file_name().unwrap().to_str().unwrap()))
+        .count();
     assert_eq!(files, tested);
 }
 
