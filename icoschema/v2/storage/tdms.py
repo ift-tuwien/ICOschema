@@ -15,8 +15,8 @@ property `icoschema_format_version` of the TDMS file:
 - The `rawdata` group's channels (1 to 3, file order) become `channel1..3`,
   values as `tdmspy` reads them (scaled by the channel's NI scaling, if it
   has one, so they are already in `unit_string`; hence an identity
-  `LinearConversion` (gain 1, offset 0), not `NoConversion`, which means raw
-  voltage values; the original scaling stays in `additional_data`). Channels of one source must
+  `LinearConversion` (gain 1, offset 0: a conversion that changed nothing), not `NoConversion`, which means
+  raw voltage values; the original scaling stays in `additional_data`). Channels of one source must
   have the same length (an error otherwise: nothing is cut).
 - Each channel's `Sensor` has `name` = the TDMS channel name and `unit` =
   its `unit_string`, nothing else.

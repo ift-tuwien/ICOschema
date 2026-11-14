@@ -21,7 +21,7 @@ Format versions of schema version 2 are registered in `_FORMATS` (the part befor
   `adc_reference_voltage`, `description`, `stu_mac`, `sth_mac`, `source_name` (always stored for a
   single source), `sampling_frequency` (Hz, per channel), `additional_data` (opaque JSON), `pre_metadata`/
   `post_metadata` (opaque JSON strings) and the ADC settings `adc_prescaler`/`adc_acquisition_time`/
-  `adc_oversample_rate`. Any other attribute that isn't PyTables bookkeeping is logged as dropped on read;
+  `adc_oversample_rate`. Any other attribute that isn't PyTables bookkeeping is kept (see `preserved.py`);
 - the `sensors` table, one row per channel column *in the same order* (nothing else records which row belongs to
   which column): the text columns `dimension`, `name`, `sensor_id`, `sensor_type`, `unit` (empty = not set), and
   the channel's conversion: `conversion` ("none" or "linear") with, for "linear", `gain` and `offset`;
@@ -32,10 +32,14 @@ Format versions of schema version 2 are registered in `_FORMATS` (the part befor
   since `h5py.Dataset.shape`/`.dtype` provide them); only `source`/`unit`/`produced_by`/`produced_at`/`params`/
   `description` become dataset attributes. A `DerivedDataset` that belongs to one source has a `source`
   attribute (the source's name); without one it belongs to the recording as a whole;
+- `/pictures/<name>` (a set of images, each one base64 text) and `/files/<name>` (an embedded file with its
+  `size`, `mime` and `original_name`), see `attachments.py`; the data acquisition's older places for them (root
+  arrays with "picture" in their name, `/embedded_files/`) are read too;
 - `/steps/`: an empty group per `ComputationStep` named by its `node`, with every field as an attribute (lists as
   string arrays, absent fields omitted), read back ordered by `step_index` and renumbered 0, 1, 2, ...
 
-Every dataset with more than one element is stored gzip-compressed (with shuffle). An unknown version is
+Everything a file has that is not described here is kept, not dropped, and written back where it was (see
+`preserved.py`). Every dataset with more than one element is stored gzip-compressed (with shuffle). An unknown version is
 rejected, so an older reader never silently drops parts of a newer file.
 
 This module is an internal implementation detail. Don't import it directly
@@ -46,7 +50,6 @@ instead.
 
 import dataclasses
 import logging
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -56,6 +59,7 @@ import numpy as np
 
 from icoschema._version import software_id
 
+from ..model.attachments import EmbeddedFile
 from ..schema.generated.dataset import (
     ChannelMetadata,
     ComputationStep,
@@ -73,6 +77,17 @@ from ..schema.generated.dataset import (
     RecordingMetadata,
     Sensor,
     Source,
+)
+from . import attachments
+from .preserved import (
+    COMPRESSION as _COMPRESSION,
+)
+from .preserved import (
+    Preserved,
+    capture_children,
+    capture_group_attrs,
+    capture_node,
+    write_preserved,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,12 +132,6 @@ _KNOWN_PRIMARY_ATTRS = {
     *_SOURCE_DATA_ATTRS,
     _SOURCE_NAME_ATTR,
 }
-# Attributes PyTables writes on every table it creates.
-_PYTABLES_ATTR = re.compile(r"^(CLASS|TITLE|VERSION|NROWS|FIELD_\d+_(NAME|FILL))$")
-
-# Applied to every dataset with more than one element.
-_COMPRESSION = {"compression": "gzip", "compression_opts": 4, "shuffle": True}
-
 _CONVERSION_NONE = "none"
 _CONVERSION_LINEAR = "linear"
 
@@ -216,12 +225,6 @@ def _load_source_from_table(f: h5py.Group, table_name: str, name: str | None = N
             f"Recording supports at most {len(_CHANNEL_SLOTS)} channels, "
             f"got {len(channel_columns)}."
         )
-
-    dropped = sorted(
-        name for name in table_ds.attrs if name not in _KNOWN_PRIMARY_ATTRS and not _PYTABLES_ATTR.match(name)
-    )
-    if dropped:
-        logger.warning("Primary table %r has unknown attributes that won't be preserved: %s", table_name, dropped)
 
     recording_data_kwargs = {
         "timestamp": table["timestamp"].tolist(),
@@ -428,6 +431,48 @@ def _sensor_row(channel_metadata: ChannelMetadata) -> np.ndarray:
     return row
 
 
+def _write_primary_attrs(
+    ds: h5py.Dataset,
+    *,
+    start_time: str | None = None,
+    adc_reference_voltage: object = None,
+    pre_metadata: str | None = None,
+    post_metadata: str | None = None,
+    description: str | None = None,
+    stu_mac: str | None = None,
+    sth_mac: str | None = None,
+    sampling_frequency: float | None = None,
+    additional_data: str | None = None,
+    adc_prescaler: int | None = None,
+    adc_acquisition_time: int | None = None,
+    adc_oversample_rate: int | None = None,
+) -> None:
+    """Set the attributes of a source's primary table that are not None (shared by `save_*` and the
+    `BundleWriter`, so both write them the same way)."""
+    texts = {
+        "Start_Time": start_time,
+        "adc_reference_voltage": None if adc_reference_voltage is None else str(adc_reference_voltage),
+        "pre_metadata": pre_metadata,
+        "post_metadata": post_metadata,
+        "description": description,
+        "stu_mac": stu_mac,
+        "sth_mac": sth_mac,
+        "additional_data": additional_data,
+    }
+    for name, value in texts.items():
+        if value is not None:
+            ds.attrs[name] = value
+    if sampling_frequency is not None:
+        ds.attrs["sampling_frequency"] = float(sampling_frequency)
+    for name, value in (
+        ("adc_prescaler", adc_prescaler),
+        ("adc_acquisition_time", adc_acquisition_time),
+        ("adc_oversample_rate", adc_oversample_rate),
+    ):
+        if value is not None:
+            ds.attrs[name] = int(value)
+
+
 def _write_recording_table(
     f: h5py.Group, source: Source, table_name: str, *, store_name: bool = True, always_name: bool = False
 ) -> None:
@@ -460,32 +505,27 @@ def _write_recording_table(
         table[channel_slot] = getattr(data, channel_slot)
 
     ds = _create_dataset(f, table_name, table)
-    if source.recording_metadata.start_time is not None:
-        ds.attrs["Start_Time"] = source.recording_metadata.start_time
-    if hardware.adc_reference_voltage is not None:
-        ds.attrs["adc_reference_voltage"] = hardware.adc_reference_voltage
-    for name in _METADATA_ATTRS:
-        value = getattr(source.recording_metadata, name)
-        if value is not None:
-            ds.attrs[name] = value
-    for name in _SOURCE_ATTRS:
-        value = getattr(source, name)
-        if value is not None:
-            ds.attrs[name] = value
+    _write_primary_attrs(
+        ds,
+        start_time=source.recording_metadata.start_time,
+        adc_reference_voltage=hardware.adc_reference_voltage,
+        pre_metadata=source.recording_metadata.pre_metadata,
+        post_metadata=source.recording_metadata.post_metadata,
+        description=source.description,
+        stu_mac=source.stu_mac,
+        sth_mac=source.sth_mac,
+        sampling_frequency=source.sampling_frequency,
+        additional_data=source.additional_data,
+        adc_prescaler=hardware.adc_prescaler,
+        adc_acquisition_time=hardware.adc_acquisition_time,
+        adc_oversample_rate=hardware.adc_oversample_rate,
+    )
     if store_name and (always_name or str(source.name) != _DEFAULT_SOURCE_NAME):
         ds.attrs[_SOURCE_NAME_ATTR] = str(source.name)
-    if source.sampling_frequency is not None:
-        ds.attrs["sampling_frequency"] = float(source.sampling_frequency)
-    if source.additional_data is not None:
-        ds.attrs["additional_data"] = source.additional_data
     if source.quality is not None and source.quality.values:
         quality_ds = _create_dataset(f, _QUALITY_DATASET, np.asarray(source.quality.values, dtype="<f4"))
         if source.quality.sampling_frequency is not None:
             quality_ds.attrs["sampling_frequency"] = float(source.quality.sampling_frequency)
-    for name in _ADC_SETTING_ATTRS:
-        value = getattr(hardware, name)
-        if value is not None:
-            ds.attrs[name] = int(value)
 
     _create_dataset(f, "sensors", np.concatenate(sensor_rows))
 
@@ -734,6 +774,195 @@ def save_dataset_bundle(
             computations_group = f.create_group(_COMPUTATIONS_GROUP)
             for key, derived in bundle.computations.items():
                 _write_derived_dataset(computations_group, key, derived)
+
+        attachments.write_attachments(f, dict(getattr(bundle, "pictures", {}) or {}), dict(getattr(bundle, "files", {}) or {}))
+        preserved = getattr(bundle, "preserved", None)
+        if preserved:
+            write_preserved(f, preserved, {PRIMARY_TOKEN: table_name, PREPROCESSED_TOKEN: _PREPROCESSED_TABLE})
+
+
+PRIMARY_TOKEN = "{primary}"
+PREPROCESSED_TOKEN = "{preprocessed}"
+"""Stand for the names of the primary and the preprocessed table in the paths of `Preserved` (a file is saved
+with the names of the writer, not those of the file it was read from)."""
+
+_STEP_KNOWN_ATTRS = {"step_index", "duration_s", *_STEP_STRING_ATTRS, *_STEP_LIST_ATTRS}
+_DERIVED_KNOWN_ATTRS = {"unit", "produced_by", "produced_at", "params", "description"}
+_ROOT_KNOWN_ATTRS = frozenset(
+    {"icoschema_format_version", "primary_table", "writer", "preprocessed_table", "sources", *_PROVENANCE_ATTRS}
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class Layout:
+    """Where a file keeps what this package models, to tell what it doesn't (schema version 2, or the layouts
+    of schema version 1 when `icoschema.migrate` brings their pictures, files and unknown parts along)."""
+
+    table_name: str
+    multiple: bool  # the sources are under /sources/<name>/
+    source_names: tuple[str, ...]
+    preprocessed_name: str = _PREPROCESSED_TABLE
+    known_primary_attrs: frozenset[str] = frozenset(_KNOWN_PRIMARY_ATTRS)
+    known_root_attrs: frozenset[str] = _ROOT_KNOWN_ATTRS
+    known_sensor_columns: frozenset[str] = frozenset(name for name, _ in _SENSOR_DTYPE)
+
+    @property
+    def source_children(self) -> set[str]:
+        return {self.table_name, "sensors", _QUALITY_DATASET, self.preprocessed_name}
+
+
+@dataclasses.dataclass
+class Extras:
+    """What a file has next to the recording, the preprocessed tables, the computations and the steps."""
+
+    pictures: dict[str, list[str]] = dataclasses.field(default_factory=dict)
+    files: dict[str, EmbeddedFile] = dataclasses.field(default_factory=dict)
+    preserved: Preserved = dataclasses.field(default_factory=Preserved)
+
+
+def _join(*parts: str) -> str:
+    return "/".join(part for part in parts if part)
+
+
+def _is_group(f: h5py.Group, name: str) -> bool:
+    return isinstance(f.get(name), h5py.Group)
+
+
+def _root_known(f: h5py.File, layout: Layout) -> set[str]:
+    """The names at the root of the file that belong to the layout (not the attachments, see `Extras`)."""
+    known = {name for name in (_COMPUTATIONS_GROUP, _STEPS_GROUP) if _is_group(f, name)}
+    known |= {_SOURCES_GROUP} if layout.multiple else layout.source_children
+    return known
+
+
+def _absorb(into: Preserved, other: Preserved) -> None:
+    for path, attrs in other.attrs.items():
+        into.attrs.setdefault(path, {}).update(attrs)
+    into.nodes.update(other.nodes)
+
+
+def _collect_source(group: h5py.Group, path: str, layout: Layout, in_group: bool, preserved: Preserved) -> None:
+    children = layout.source_children
+    if layout.table_name in group:
+        capture_group_attrs(group[layout.table_name], _join(path, PRIMARY_TOKEN), layout.known_primary_attrs, preserved)
+    if "sensors" in group:
+        sensors = group["sensors"]
+        capture_group_attrs(sensors, _join(path, "sensors"), (), preserved)
+        extra_columns = sorted(set(getattr(sensors.dtype, "names", None) or ()) - layout.known_sensor_columns)
+        if extra_columns:
+            # The sensors table has no place for these columns: keep the table as it was, next to the new one
+            logger.info("Keeping the original sensors table of %r (it has the columns %s)", path or "/", extra_columns)
+            node = capture_node(group, "sensors")
+            if node is not None:
+                preserved.nodes[_join(path, "sensors__original")] = node
+    if _QUALITY_DATASET in group:
+        capture_group_attrs(group[_QUALITY_DATASET], _join(path, _QUALITY_DATASET), ("sampling_frequency",), preserved)
+    if layout.preprocessed_name in group:
+        capture_group_attrs(
+            group[layout.preprocessed_name], _join(path, PREPROCESSED_TOKEN), _PREPROCESSED_ATTRS, preserved
+        )
+    if in_group:
+        capture_group_attrs(group, path, (), preserved)
+        capture_children(group, path, lambda name: name in children, preserved)
+
+
+def _collect_computations(group: h5py.Group, path: str, prefix: str, keys: set[str], preserved: Preserved) -> bool:
+    """Preserve what is in `/computations/` and isn't one of `keys`. Returns whether anything below is one."""
+    found = False
+    local = Preserved()
+    for name in group:
+        child_path = f"{path}/{name}"
+        obj = group.get(name) if isinstance(group.get(name, getlink=True), h5py.HardLink) else None
+        if isinstance(obj, h5py.Dataset) and f"{prefix}{name}" in keys:
+            found = True
+            capture_group_attrs(obj, child_path, _DERIVED_KNOWN_ATTRS, local)
+        elif isinstance(obj, h5py.Group):
+            below = Preserved()
+            if _collect_computations(obj, child_path, f"{prefix}{name}/", keys, below):
+                found = True
+                capture_group_attrs(obj, child_path, (), below)
+                _absorb(local, below)
+                continue
+            node = capture_node(group, name)
+            if node is not None:
+                local.nodes[child_path] = node
+        else:
+            node = capture_node(group, name)
+            if node is not None:
+                local.nodes[child_path] = node
+    _absorb(preserved, local)
+    return found
+
+
+def collect_preserved(
+    f: h5py.File, layout: Layout, computations: set[str], step_nodes: set[str], found: attachments.Attachments
+) -> Preserved:
+    """Everything in `f` that the layout, the loaded computations and steps, and the attachments don't claim."""
+    preserved = Preserved()
+    _absorb(preserved, found.preserved)
+    capture_group_attrs(f, "", layout.known_root_attrs, preserved)
+    root_known = _root_known(f, layout) | found.claimed
+    capture_children(f, "", lambda name: name in root_known, preserved)
+
+    if layout.multiple:
+        group = f[_SOURCES_GROUP]
+        capture_group_attrs(group, _SOURCES_GROUP, (), preserved)
+        for name in group:
+            if name in layout.source_names:
+                _collect_source(group[name], f"{_SOURCES_GROUP}/{name}", layout, True, preserved)
+            else:  # a group that isn't listed as a source
+                node = capture_node(group, name)
+                if node is not None:
+                    preserved.nodes[f"{_SOURCES_GROUP}/{name}"] = node
+    else:
+        _collect_source(f, "", layout, False, preserved)
+
+    if _is_group(f, _COMPUTATIONS_GROUP):
+        group = f[_COMPUTATIONS_GROUP]
+        capture_group_attrs(group, _COMPUTATIONS_GROUP, (), preserved)
+        _collect_computations(group, _COMPUTATIONS_GROUP, "", computations, preserved)
+    if _is_group(f, _STEPS_GROUP):
+        group = f[_STEPS_GROUP]
+        capture_group_attrs(group, _STEPS_GROUP, (), preserved)
+        for node in group:
+            path = f"{_STEPS_GROUP}/{node}"
+            step = group.get(node) if isinstance(group.get(node, getlink=True), h5py.HardLink) else None
+            if node in step_nodes and isinstance(step, h5py.Group):
+                capture_group_attrs(step, path, _STEP_KNOWN_ATTRS, preserved)
+                capture_children(step, path, lambda _name: False, preserved)
+            else:  # a step that was malformed or didn't fit its computations, or not a step at all
+                raw = capture_node(group, node)
+                if raw is not None:
+                    preserved.nodes[path] = raw
+    return preserved
+
+
+def extras_of(f: h5py.File, layout: Layout, computations: set[str], step_nodes: set[str]) -> Extras:
+    """The pictures and embedded files of `f` (wherever it stores them) and everything else it has that the
+    layout doesn't model."""
+    found = attachments.load_attachments(f, _root_known(f, layout))
+    preserved = collect_preserved(f, layout, computations, step_nodes, found)
+    return Extras(pictures=found.pictures, files=found.files, preserved=preserved)
+
+
+def load_bundle_with_extras(
+    path: str, *, on_error: Literal["skip", "raise"] = "skip"
+) -> tuple[DatasetBundle, Extras]:
+    """`load_dataset_bundle`, and with it the `Extras` of the file: its pictures and embedded files and
+    everything it has that this package doesn't model."""
+    bundle = load_dataset_bundle(path, on_error=on_error)
+    with h5py.File(path, "r") as f:
+        spec = _file_format(f, path)
+        layout = Layout(
+            table_name=_decode(f.attrs["primary_table"]),
+            multiple=_has_sources_layout(f, spec),
+            source_names=tuple(str(name) for name in bundle.recording.sources),
+            preprocessed_name=_decode(f.attrs["preprocessed_table"])
+            if "preprocessed_table" in f.attrs
+            else _PREPROCESSED_TABLE,
+        )
+        extras = extras_of(f, layout, set(bundle.computations), {str(step.node) for step in bundle.steps})
+    return bundle, extras
 
 
 def load_dataset_bundle(path: str, *, on_error: Literal["skip", "raise"] = "skip") -> DatasetBundle:

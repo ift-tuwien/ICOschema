@@ -9,17 +9,20 @@ What changes (see icoschema/v2/schema/dataset.yaml):
 
 - `Source.stu_id`/`sth_id` become `stu_mac`/`sth_mac` (the same values); `Source.description` is left unset.
 - `Sensor.phys_min`/`phys_max`/`volt_min`/`volt_max` are dropped, and each channel gets a required `conversion`
-  in place of the `compensations` list. Every channel of a v1 file becomes a `LinearConversion` (from ADC voltage
-  to the sensor's unit), whatever its v1 conversion or the file's `conversion` attribute says: v1 files were
-  never written with a usable one (the attribute and `NoConversion` are not trusted). Gain and offset are, in
-  this order:
+  in place of the `compensations` list. In v2 a conversion says what *was applied* to the raw (voltage) values to
+  get the stored ones, never what is still to be applied. Every file of schema version 1 is taken as converted
+  already, whatever its v1 conversion or the file's `conversion` attribute says (the data acquisition has always
+  written its values in the unit of the sensor, using the linear conversion of the sensor; the attribute and
+  `NoConversion` are not trusted), so every channel becomes a `LinearConversion` from the voltage to the sensor's
+  unit, which records what happened. The values are never changed. Gain and offset are, in this order:
 
   1. the channel's `scaling_factor` and `offset` in the file's `sensors` table (`convert_file` reads them; a
      bundle no longer has them when the file said "already converted");
   2. the gain and offset of a v1 `LinearConversion` of the channel;
   3. the sensor's range, `gain = (phys_max - phys_min) / (volt_max - volt_min)` and
      `offset = phys_min - gain * volt_min`;
-  4. `gain = 1`, `offset = 0` when none of that is there (e.g. a TDMS file).
+  4. `gain = 1`, `offset = 0` when none of that is there (e.g. a TDMS file, whose values are in the unit of the
+     channel already: a conversion that changed nothing).
 
   A `PolynomialConversion` of degree 1 (`[offset, gain]`) counts as a `LinearConversion`; any other polynomial, a
   `FrequencyCompensation` and a channel with several compensations have no v2 form and raise `ValueError`.
@@ -219,12 +222,55 @@ def stored_scalings_of(path: str, bundle: v1.DatasetBundle) -> dict[str, list[Sc
     return result
 
 
+def extras_of(path: str, bundle: v1.DatasetBundle) -> Any:
+    """The pictures and embedded files of the schema version 1 HDF5 file `path` (which `bundle` was read from),
+    and everything else it has that version 1 doesn't model, as the `Extras` of schema version 2
+    (`DatasetBundle.with_extras`). Nothing of the file is dropped by a migration, except what the
+    migration itself turns into something else: the `conversion` attribute and the range columns of the
+    `sensors` table become each channel's `LinearConversion`, and PyTables bookkeeping is not carried.
+
+    - pictures: root arrays with "picture" in their name, as the data acquisition wrote them;
+    - embedded files: the datasets of `/embedded_files/`;
+    - attributes of the root, a primary table, ... that version 1 doesn't read, and nodes it doesn't know,
+      are kept where they were;
+    - a `sensors` table that has columns version 2 has no place for (e.g. `channel_number`) is kept as
+      `sensors__original` next to the new one.
+    """
+    import h5py
+
+    from .v1.storage import hdf5 as storage1
+    from .v2.storage import hdf5 as storage2
+
+    def text(value: Any) -> str:
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+    with h5py.File(path, "r") as f:
+        layout = storage2.Layout(
+            table_name=text(f.attrs["primary_table"]) if "primary_table" in f.attrs else "acceleration",
+            multiple="sources" in f.attrs and "sources" in f,
+            source_names=tuple(str(name) for name in bundle.recording.sources),
+            preprocessed_name=text(f.attrs["preprocessed_table"]) if "preprocessed_table" in f.attrs else "preprocessed",
+            known_primary_attrs=frozenset(storage1._KNOWN_PRIMARY_ATTRS | {"Sensor_Range"}),
+            known_sensor_columns=frozenset(name for name, _ in storage1._SENSOR_DTYPE)
+            | frozenset(name for name, _ in storage2._SENSOR_DTYPE),
+        )
+        return storage2.extras_of(f, layout, set(bundle.computations), {str(step.node) for step in bundle.steps})
+
+
+def file_as_v2(path: str) -> v2.DatasetBundle:
+    """The schema version 2 bundle of the schema version 1 file `path` (HDF5 or TDMS), with everything
+    `v1_to_v2` and `extras_of` bring along."""
+    bundle = v1.DatasetBundle.from_file(path)
+    try:
+        stored = stored_scalings_of(path, bundle)
+        extras = extras_of(path, bundle)
+    except OSError:  # not an HDF5 file (TDMS): nothing stored, nothing besides
+        return v1_to_v2(bundle, stored_scalings={})
+    return v1_to_v2(bundle, stored_scalings=stored).with_extras(extras)
+
+
 def convert_file(source: str, destination: str) -> None:
     """Read the HDF5 or TDMS file `source` with schema version 1 and write it to `destination` as a schema
-    version 2 HDF5 file (format 2.0)."""
-    bundle = v1.DatasetBundle.from_file(source)
-    try:
-        stored = stored_scalings_of(source, bundle)
-    except OSError:  # not an HDF5 file (TDMS): nothing stored
-        stored = {}
-    v1_to_v2(bundle, stored_scalings=stored).to_hdf5(destination, format_version="2.0")
+    version 2 HDF5 file (format 2.0). See `extras_of` for what is
+    carried along besides the recording."""
+    file_as_v2(source).to_hdf5(destination)
