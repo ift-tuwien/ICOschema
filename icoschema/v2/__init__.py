@@ -16,6 +16,7 @@ The names here are the objects defined in its submodules, not copies. The file f
 (`hdf5_format_versions()`, `FormatVersion`) are those of the HDF5 layouts this schema version can be stored in.
 """
 
+from .model.attachments import EmbeddedFile, EmbeddedFileInfo
 from .model.dataset_bundle import DatasetBundle
 from .model.preprocessed_recording import PreprocessedRecording
 from .model.recording import Recording
@@ -36,11 +37,13 @@ from .schema.generated.dataset import (
     SamplingFrequencySource,
     Sensor,
 )
+from .storage import attachments
 from .storage.hdf5 import (
     FormatVersion,
     readable_versions,
     writable_versions,
 )
+from .storage.writer import BundleWriter, SourceSpec, SourceWriter
 
 
 def hdf5_format_versions(*, writable: bool = False) -> tuple[str, ...]:
@@ -50,12 +53,15 @@ def hdf5_format_versions(*, writable: bool = False) -> tuple[str, ...]:
 
 
 __all__ = [
+    "BundleWriter",
     "ChannelMetadata",
     "ComputationStatus",
     "ComputationStep",
     "Conversion",
     "DatasetBundle",
     "DerivedDataset",
+    "EmbeddedFile",
+    "EmbeddedFileInfo",
     "FormatVersion",
     "HardwareMetadata",
     "LinearConversion",
@@ -69,5 +75,8 @@ __all__ = [
     "SamplingFrequencySource",
     "Sensor",
     "Source",
+    "SourceSpec",
+    "SourceWriter",
+    "attachments",
     "hdf5_format_versions",
 ]

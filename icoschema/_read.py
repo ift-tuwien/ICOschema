@@ -8,7 +8,7 @@ its predecessor to `_MIGRATIONS`.
 from collections.abc import Callable
 from typing import Any
 
-from . import _schemas, migrate, v1
+from . import _schemas, migrate
 
 
 def schema_version_of_file(path: str) -> int:
@@ -18,12 +18,7 @@ def schema_version_of_file(path: str) -> int:
 
 
 def _v1_file_as_v2(path: str) -> Any:
-    bundle = v1.DatasetBundle.from_file(path)
-    try:
-        stored = migrate.stored_scalings_of(path, bundle)
-    except OSError:  # not an HDF5 file (TDMS): nothing stored
-        stored = {}
-    return migrate.v1_to_v2(bundle, stored_scalings=stored)
+    return migrate.file_as_v2(path)
 
 
 # (schema version of the file, latest schema version) -> reads the file as the latest

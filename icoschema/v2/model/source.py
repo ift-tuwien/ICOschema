@@ -18,10 +18,12 @@ This file should never be imported directly, but rather only via a
     source = recording.sources["source1"]
     df = source.to_dataframe()
 
-Note: the Conversion on HardwareMetadata.channelN_metadata only describes how
-a channel's RecordingData values relate to its sensor's unit (NoConversion:
-raw voltage values; LinearConversion: gain and offset). It is not applied by
-this class, or by anything else here.
+Note: the Conversion on HardwareMetadata.channelN_metadata describes what was
+already done to the channel's raw (voltage) values to get its RecordingData
+values (NoConversion: nothing, the values are raw voltage values;
+LinearConversion: stored = raw * gain + offset, in the sensor's unit). The
+RecordingData values are those after the conversion: it is never to be applied
+again, and is not applied by this class, or by anything else here.
 """
 
 from __future__ import annotations

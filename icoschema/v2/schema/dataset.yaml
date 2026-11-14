@@ -71,8 +71,8 @@ classes:
   ChannelMetadata:
     description: >-
       Metadata describing a single sensor channel: which physical sensor
-      produced it, and the conversion that takes its RecordingData values to
-      a value in sensor.unit.
+      produced it, and the conversion that was applied to its raw values to
+      get its RecordingData values.
     attributes:
       sensor:
         range: Sensor
@@ -83,8 +83,11 @@ classes:
         range: Conversion
         required: true
         description: >-
-          How this channel's RecordingData values relate to sensor.unit: see
-          the subclasses of Conversion.
+          The conversion that was applied to this channel's raw (voltage)
+          values to get its RecordingData values, which are therefore in
+          sensor.unit (unless it is NoConversion). It describes what
+          happened: it is never to be applied to the RecordingData values
+          again. See the subclasses of Conversion.
 
   Sensor:
     description: >-
@@ -114,9 +117,11 @@ classes:
   Conversion:
     abstract: true
     description: >-
-      How a channel's RecordingData values relate to the physical unit of its
-      associated Sensor. Concrete conversions are represented by subclasses,
-      each declaring the parameters its kind of conversion needs.
+      A conversion that was applied to a channel's raw (voltage) values to
+      get the values stored in its RecordingData, so that they are in the
+      physical unit of its associated Sensor. Concrete conversions are
+      represented by subclasses, each declaring the parameters its kind of
+      conversion needs.
     attributes:
       conversion_type:
         range: string
@@ -130,13 +135,15 @@ classes:
   NoConversion:
     is_a: Conversion
     description: >-
-      No conversion is defined: the channel's values are raw voltage values.
+      No conversion was applied: the channel's values are raw voltage values.
 
   LinearConversion:
     is_a: Conversion
     description: >-
-      A linear conversion: converted = raw * gain + offset, with converted in
-      the unit of the channel's Sensor.
+      A linear conversion that was applied: stored = raw * gain + offset,
+      with the stored value in the unit of the channel's Sensor. A gain of 1
+      and an offset of 0 is a conversion that changed nothing (values that
+      were in the unit already).
     attributes:
       gain:
         range: float

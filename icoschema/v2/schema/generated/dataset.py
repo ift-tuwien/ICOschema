@@ -1,5 +1,5 @@
 # Auto generated from dataset.yaml by pythongen.py version: 0.0.1
-# Generation date: 2026-11-10T18:26:46
+# Generation date: 2026-11-14T14:53:42
 # Schema: dataset
 #
 # id: dataset_schema
@@ -165,8 +165,8 @@ class HardwareMetadata(YAMLRoot):
 @dataclass(repr=False)
 class ChannelMetadata(YAMLRoot):
     """
-    Metadata describing a single sensor channel: which physical sensor produced it, and the conversion that takes its
-    RecordingData values to a value in sensor.unit.
+    Metadata describing a single sensor channel: which physical sensor produced it, and the conversion that was
+    applied to its raw values to get its RecordingData values.
     """
     _inherited_slots: ClassVar[list[str]] = []
 
@@ -232,8 +232,9 @@ class Sensor(YAMLRoot):
 @dataclass(repr=False)
 class Conversion(YAMLRoot):
     """
-    How a channel's RecordingData values relate to the physical unit of its associated Sensor. Concrete conversions
-    are represented by subclasses, each declaring the parameters its kind of conversion needs.
+    A conversion that was applied to a channel's raw (voltage) values to get the values stored in its RecordingData,
+    so that they are in the physical unit of its associated Sensor. Concrete conversions are represented by
+    subclasses, each declaring the parameters its kind of conversion needs.
     """
     _inherited_slots: ClassVar[list[str]] = []
 
@@ -270,7 +271,7 @@ class Conversion(YAMLRoot):
 
 class NoConversion(Conversion):
     """
-    No conversion is defined: the channel's values are raw voltage values.
+    No conversion was applied: the channel's values are raw voltage values.
     """
     _inherited_slots: ClassVar[list[str]] = []
 
@@ -289,7 +290,9 @@ class NoConversion(Conversion):
 @dataclass(repr=False)
 class LinearConversion(Conversion):
     """
-    A linear conversion: converted = raw * gain + offset, with converted in the unit of the channel's Sensor.
+    A linear conversion that was applied: stored = raw * gain + offset, with the stored value in the unit of the
+    channel's Sensor. A gain of 1 and an offset of 0 is a conversion that changed nothing (values that were in the
+    unit already).
     """
     _inherited_slots: ClassVar[list[str]] = []
 

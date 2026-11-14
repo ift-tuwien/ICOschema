@@ -426,7 +426,7 @@ def test_an_unknown_kind_of_conversion_is_refused(tmp_path):
         load_recording(str(path))
 
 
-def test_an_unknown_primary_table_attribute_is_reported_as_dropped(tmp_path, caplog):
+def test_an_unknown_primary_table_attribute_is_kept_not_dropped(tmp_path, caplog):
     path = tmp_path / "extra.hdf5"
     write_file(path, rows=[(0, 0, 1.0)])
     with h5py.File(path, "r+") as f:
@@ -435,5 +435,13 @@ def test_an_unknown_primary_table_attribute_is_reported_as_dropped(tmp_path, cap
 
     with caplog.at_level(logging.WARNING, logger="icoschema.v2.storage.hdf5"):
         load_recording(str(path))
+    assert "dropped" not in caplog.text and "won't be preserved" not in caplog.text
 
-    assert "Sensor_Range" in caplog.text and "conversion" in caplog.text
+    from icoschema.v2 import DatasetBundle as ModelBundle
+
+    bundle = ModelBundle.from_hdf5(str(path))
+    assert set(bundle.preserved.attrs["{primary}"]) == {"Sensor_Range", "conversion"}
+    bundle.to_hdf5(str(tmp_path / "again.hdf5"))
+    with h5py.File(tmp_path / "again.hdf5") as f:
+        table = f[f.attrs["primary_table"]]
+        assert table.attrs["Sensor_Range"] == "± 100.0 g₀" and table.attrs["conversion"] == "true"

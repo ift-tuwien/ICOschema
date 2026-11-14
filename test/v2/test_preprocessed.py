@@ -169,15 +169,18 @@ def test_non_integer_adc_setting_is_rejected(tmp_path):
         Recording.from_hdf5(str(v1_file))
 
 
-def test_unknown_primary_table_attributes_are_logged_as_dropped(tmp_path, caplog):
+def test_unknown_primary_table_attributes_are_kept(tmp_path, caplog):
     v1_file = tmp_path / "extra.hdf5"
     write_file(v1_file, rows=[(0, 0, 1.0)], conversion="none")
     with h5py.File(v1_file, "a") as f:
         f["vibration"].attrs["operator"] = "someone"
 
     with caplog.at_level(logging.WARNING):
-        Recording.from_hdf5(str(v1_file))
-    assert "operator" in caplog.text
+        bundle = DatasetBundle.from_hdf5(str(v1_file))
+    assert "operator" not in caplog.text
+    bundle.to_hdf5(str(tmp_path / "again.hdf5"))
+    with h5py.File(tmp_path / "again.hdf5") as f:
+        assert f[f.attrs["primary_table"]].attrs["operator"] == "someone"
 
 
 def test_pytables_bookkeeping_attributes_are_not_reported(caplog):

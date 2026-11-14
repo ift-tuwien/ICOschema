@@ -35,12 +35,14 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ..schema.generated import dataset as generated
 from ..schema.generated.dataset import ComputationStep, DerivedDataset
+from .attachments import DEFAULT_MIME, EmbeddedFile, check_attachment_name
 from .preprocessed_recording import PreprocessedRecording
 from .recording import Recording
 from .source import Source
 
 if TYPE_CHECKING:
-    from ..storage.hdf5 import FormatVersion
+    from ..storage.hdf5 import Extras, FormatVersion
+    from ..storage.preserved import Preserved
 
 _CHANNELS = ("channel1", "channel2", "channel3")
 
@@ -68,15 +70,52 @@ class DatasetBundle(generated.DatasetBundle):
     only source). `steps` is a list ordered by `step_index` (0, 1, 2, ...).
     Add steps only through `with_step`, which assigns the index and
     validates the step.
+
+    Next to the generated fields a bundle has `pictures` (a dict: name -> list of base64 images) and `files`
+    (name -> `EmbeddedFile`), see `with_picture`/`with_file`, and `preserved`: what the file it was read from
+    has that this package doesn't model, kept so that saving the bundle drops nothing (see
+    `icoschema.v2.storage.preserved`). All three are carried by every `with_*` method.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pictures = kwargs.pop("pictures", None)
+        files = kwargs.pop("files", None)
+        preserved = kwargs.pop("preserved", None)
         if "preprocessed" in kwargs:
             table = kwargs.pop("preprocessed")
             if "preprocessed_tables" in kwargs:
                 raise TypeError("pass either `preprocessed` or `preprocessed_tables`, not both")
             kwargs["preprocessed_tables"] = [] if table is None else [table]
         super().__init__(*args, **kwargs)
+        # Underscore names: the generated base class turns plain attributes into JSON and wraps dicts
+        object.__setattr__(
+            self,
+            "_pictures",
+            {check_attachment_name(name, "picture"): list(images) for name, images in (pictures or {}).items()},
+        )
+        object.__setattr__(
+            self, "_files", {check_attachment_name(name, "file"): file for name, file in (files or {}).items()}
+        )
+        if preserved is None:
+            from ..storage.preserved import Preserved
+
+            preserved = Preserved()
+        object.__setattr__(self, "_preserved", preserved)
+
+    @property
+    def pictures(self) -> dict[str, list[str]]:
+        """The picture sets of the bundle: name -> the base64 text of each image (see `with_picture`)."""
+        return self._pictures  # type: ignore[attr-defined, no-any-return]
+
+    @property
+    def files(self) -> dict[str, EmbeddedFile]:
+        """The embedded files of the bundle by name (see `with_file`)."""
+        return self._files  # type: ignore[attr-defined, no-any-return]
+
+    @property
+    def preserved(self) -> Preserved:
+        """What the file this bundle was read from has that isn't modelled, kept for saving it again."""
+        return self._preserved  # type: ignore[attr-defined, no-any-return]
 
     def __post_init__(self, *args: Any, **kwargs: Any) -> None:
         super().__post_init__(*args, **kwargs)
@@ -115,12 +154,15 @@ class DatasetBundle(generated.DatasetBundle):
         """
         from ..storage import hdf5
 
-        loaded = hdf5.load_dataset_bundle(path, on_error=on_error)
+        loaded, extras = hdf5.load_bundle_with_extras(path, on_error=on_error)
         bundle = cls(
             recording=_as_model_recording(loaded.recording),
             computations=dict(loaded.computations),
             steps=list(loaded.steps),
             provenance=loaded.provenance,
+            pictures=extras.pictures,
+            files=extras.files,
+            preserved=extras.preserved,
         )
         for table in loaded.preprocessed_tables:
             bundle = bundle.with_preprocessed(table)
@@ -220,9 +262,7 @@ class DatasetBundle(generated.DatasetBundle):
                 "cannot replace the recording of a bundle with computation steps "
                 "(they were computed from the current recording) -- call without_steps() first"
             )
-        return DatasetBundle(
-            recording=recording, computations=dict(self.computations), provenance=self.provenance
-        )
+        return self._copy(recording=recording, preprocessed_tables=[], steps=[])
 
     def with_preprocessed(
         self, preprocessed: generated.PreprocessedRecording, source: str | None = None
@@ -266,6 +306,60 @@ class DatasetBundle(generated.DatasetBundle):
         if self.preprocessed_for(source) is None:
             raise ValueError(f"source {source!r} has no preprocessed table")
         return self._copy(preprocessed_tables=[table for table in self._tables() if table.source != source])
+
+    # ── pictures, embedded files and what a file has besides ───────────────
+
+    def with_picture(self, name: str, images: Iterable[str], *, overwrite: bool = False) -> DatasetBundle:
+        """A copy of this bundle with the picture set `name` (the base64 text of each image) added.
+
+        Pictures are stored under `/pictures/`. Raises `ValueError` if `name` is not a single HDF5
+        path segment, or is taken and `overwrite` is not set."""
+        check_attachment_name(name, "picture")
+        if name in self.pictures and not overwrite:
+            raise ValueError(f"picture {name!r} already exists (pass overwrite=True to replace it)")
+        return self._copy(pictures={**self.pictures, name: list(images)})
+
+    def without_picture(self, name: str) -> DatasetBundle:
+        """A copy of this bundle without the picture set `name`. Raises `ValueError` if there is none."""
+        if name not in self.pictures:
+            raise ValueError(f"no such picture: {name!r}")
+        return self._copy(pictures={key: value for key, value in self.pictures.items() if key != name})
+
+    def with_file(
+        self,
+        name: str,
+        content: bytes,
+        *,
+        mime: str | None = None,
+        original_name: str | None = None,
+        overwrite: bool = False,
+    ) -> DatasetBundle:
+        """A copy of this bundle with an embedded file stored as `name` added.
+
+        Files are stored under `/files/`. `name` has to be a single HDF5 path segment;
+        `original_name` (default `name`) is what the file was called. Raises `ValueError` if `name` is not a
+        valid name, or is taken and `overwrite` is not set."""
+        check_attachment_name(name, "file")
+        if name in self.files and not overwrite:
+            raise ValueError(f"file {name!r} already exists (pass overwrite=True to replace it)")
+        file = EmbeddedFile(bytes(content), mime or DEFAULT_MIME, original_name if original_name is not None else name)
+        return self._copy(files={**self.files, name: file})
+
+    def without_file(self, name: str) -> DatasetBundle:
+        """A copy of this bundle without the embedded file `name`. Raises `ValueError` if there is none."""
+        if name not in self.files:
+            raise ValueError(f"no such file: {name!r}")
+        return self._copy(files={key: value for key, value in self.files.items() if key != name})
+
+    def with_extras(self, extras: Extras) -> DatasetBundle:
+        """A copy of this bundle that also has the pictures, files and preserved parts of `extras` (what a
+        reader of another layout found next to the data, see `icoschema.migrate`). Pictures and files of the
+        same name replace this bundle's."""
+        return self._copy(
+            pictures={**self.pictures, **extras.pictures},
+            files={**self.files, **extras.files},
+            preserved=self.preserved.merged(extras.preserved),
+        )
 
     # ── computations and steps ────────────────────────────────────────────
 
@@ -382,6 +476,9 @@ class DatasetBundle(generated.DatasetBundle):
             "computations": dict(self.computations),
             "steps": list(self._steps()),
             "provenance": self.provenance,
+            "pictures": {name: list(images) for name, images in self.pictures.items()},
+            "files": dict(self.files),
+            "preserved": self.preserved,
         }
         fields.update(changes)
         return DatasetBundle(**fields)

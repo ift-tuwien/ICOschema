@@ -60,26 +60,97 @@ Compared to version 1:
 
 - `Sensor` has no `phys_min`, `phys_max`, `volt_min` and `volt_max` any more.
 - Every `ChannelMetadata` has a `conversion` next to its `sensor` (required), replacing the list `compensations`.
-  Only two kinds remain: `NoConversion` (no conversion is defined: the values are raw voltage values) and
-  `LinearConversion` (`converted = raw * gain + offset`, in the sensor's unit). `Compensation`,
+  A conversion says what *was applied* to the raw (voltage) values to get the stored ones: the stored values are
+  the values after it, and it is never to be applied again. Only two kinds remain: `NoConversion` (nothing was
+  applied: the values are raw voltage values) and `LinearConversion` (`stored = raw * gain + offset`, in the
+  sensor's unit). `Compensation`,
   `FrequencyCompensation` and `PolynomialConversion` are gone. A conversion carries a `conversion_type` (its class
   name), which keeps a parameterless `NoConversion` from being an empty value.
 - `Source.stu_id` and `Source.sth_id` are `stu_mac` and `sth_mac`; a source has a new optional `description`.
-- Its HDF5 files are format `2.0` (one layout that holds everything the `1.x` formats did): the `sensors` table has
+- Its HDF5 files are format `2.0` (one layout that holds everything the `1.x` formats did) (with the `/pictures/` and `/files/` groups, see below): the `sensors` table has
   the columns `dimension`, `name`, `sensor_id`, `sensor_type`, `unit` and the channel's conversion (`conversion`
   "none" or "linear", `gain`, `offset`); there is no table-wide `conversion` attribute; a source's `description`,
   `stu_mac` and `sth_mac` are attributes of its primary table. Files of version 1 (`1.x` or unversioned) are read
   with `icoschema.v1`; reading one with `icoschema.v2` raises an error that says so.
 - A TDMS file is still read in its one (unversioned) layout. Its values are in the unit of the channel already, so
-  each channel gets an identity `LinearConversion` (not `NoConversion`), and `stu_mac` stays unset (a group name is
+  each channel gets an identity `LinearConversion` (a conversion that changed nothing, not `NoConversion`), and `stu_mac` stays unset (a group name is
   not a MAC address).
 
 `from icoschema import ...` means version 2 (the latest); `from icoschema import v1` stays on version 1, which is
 the one that reads version 1 files. `icoschema.migrate` converts version 1 data to version 2:
-`migrate.convert_file("old.hdf5", "new.hdf5")` or `migrate.v1_to_v2(bundle)`. Every channel becomes a
-`LinearConversion`, whatever the v1 file's `conversion` attribute says: gain and offset are the channel's
+`migrate.convert_file("old.hdf5", "new.hdf5")` or `migrate.v1_to_v2(bundle)`. A file of version 1 is taken as
+converted already, whatever its `conversion` attribute says (the data acquisition always wrote its values in the
+unit of the sensor), so no value is changed and every channel becomes a `LinearConversion` that records what was
+done: gain and offset are the channel's
 `scaling_factor`/`offset` of the file's `sensors` table, else those of a v1 `LinearConversion`, else derived from the
 sensor's range (`gain = Δphys / Δvolt`, `offset = phys_min - gain * volt_min`), else 1 and 0.
+
+#### Recording while it is measured: `BundleWriter`
+
+A `DatasetBundle` holds every sample as a Python object, which is far too much memory for a long recording. A
+`BundleWriter` appends the samples to the file as they arrive and writes the file a `DatasetBundle` would
+(format 2.0), so every reader reads it:
+
+```python
+from icoschema.v2 import BundleWriter, SourceSpec, ChannelMetadata, LinearConversion, Sensor
+
+channel = ChannelMetadata(
+    sensor=Sensor(sensor_id="acc100g", name="Acceleration", unit="g", dimension="Acceleration"),
+    conversion=LinearConversion(gain=0.0123, offset=-6.5),  # applied to the raw volts: the values are in "g"
+)
+spec = SourceSpec(
+    name="sth1",                                            # a source is one STU/STH combination
+    channels=[channel],
+    start_time="2026-11-14T10:00:00.000000",                # of this source; sources have their own clocks
+    stu_mac="08-6B-D7-0F-47-2C",
+    sth_mac="14-2D-41-D7-77-7D",
+    adc_prescaler=2, adc_acquisition_time=8, adc_oversample_rate=64, adc_reference_voltage=3.3,
+)
+with BundleWriter("measurement.hdf5", [spec]) as writer:    # several specs: several sources, one file
+    source = writer["sth1"]
+    source.append_row(timestamp=0, values=[2048.0], counter=0)  # microseconds since `start_time`
+    source.append(timestamps, [channel1_values], counters)      # or many rows at once
+    source.update(additional_data='{"dataloss": 0.0}')          # what is only known later
+    writer.add_file("report", pdf_bytes, mime="application/pdf")
+```
+
+What is known before the first sample (sensors, conversions, ADC settings, start time, MACs) is written when the
+file is opened, so even a file whose writer was never closed says what its data is. Rows are buffered
+(`chunk_rows`, default 8192) and written in compressed chunks; `flush()` writes them out at any time. A writer
+is not thread-safe: use one from a single thread.
+
+#### Pictures and embedded files
+
+Both belong to the bundle as a whole and are stored in groups of their own: `/pictures/<name>` (a
+set of images, each one the base64 text of an image) and `/files/<name>` (the bytes of a file, with its `mime`
+type and `original_name`):
+
+```python
+bundle = bundle.with_picture("post__pictures", [image_base64, ...])
+bundle = bundle.with_file("report", pdf_bytes, mime="application/pdf", original_name="Report 1.pdf")
+bundle.pictures, bundle.files            # name -> list of images, name -> EmbeddedFile
+bundle.to_hdf5("some_file.hdf5")
+```
+
+To add one to a file that is already on disk without loading it (a measurement can be large), use
+`icoschema.v2.attachments` (`add_picture`, `add_file`, `list_files`, `read_file`, `read_pictures`,
+`remove_file`); it changes the file in place.
+
+Files written by the data acquisition before these groups existed keep the picture sets as arrays at the root of
+the file (a name with "picture" in it) and the embedded files under `/embedded_files/`. Reading finds them there,
+whatever the schema version of the file, so saving (or `icoschema.migrate.convert_file`) moves them into the
+groups.
+
+#### Nothing is dropped
+
+Everything in a file that this package has no model for is kept and written back where it was: unknown
+attributes (of the root, a primary table, computations, steps, ...), unknown nodes (groups, datasets and links,
+anywhere), malformed computations and steps, and a `sensors` table with columns version 2 has no place for (kept
+as `sensors__original` next to the new one). They are in `bundle.preserved`, opaque to this package. Left out
+are only PyTables bookkeeping (`CLASS`, `TITLE`, ...) of the nodes this package models, and what a migration turns
+into something else (the v1 `conversion` flag and range columns become the channel's `LinearConversion`). Limits:
+preserved datasets are held in memory, HDF5 references can't be copied between files (this is logged), and a
+dataset is written back with the package's usual compression, not the chunking it had.
 
 To open a file of any schema version in an application, use `icoschema.read(path)`: it returns the latest
 `DatasetBundle`, migrating an older file as above. `icoschema.schema_version_of_file(path)` tells the version of a
