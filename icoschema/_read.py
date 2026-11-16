@@ -6,9 +6,14 @@ its predecessor to `_MIGRATIONS`.
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING
 
 from . import _schemas, migrate
+
+if TYPE_CHECKING:
+    # For the annotations only. This names the latest schema version for the type checker, so it moves with
+    # `LATEST` in `_schemas.py` (the check in test_new_schema_version.py covers `__init__.py`, not this line).
+    from .v2 import DatasetBundle
 
 
 def schema_version_of_file(path: str) -> int:
@@ -17,17 +22,17 @@ def schema_version_of_file(path: str) -> int:
     return _schemas.file_schema_version(path)
 
 
-def _v1_file_as_v2(path: str) -> Any:
+def _v1_file_as_v2(path: str) -> "DatasetBundle":
     return migrate.file_as_v2(path)
 
 
 # (schema version of the file, latest schema version) -> reads the file as the latest
-_MIGRATIONS: dict[tuple[int, int], Callable[[str], Any]] = {
+_MIGRATIONS: dict[tuple[int, int], Callable[[str], "DatasetBundle"]] = {
     (1, 2): _v1_file_as_v2,
 }
 
 
-def read(path: str) -> Any:
+def read(path: str) -> "DatasetBundle":
     """The `DatasetBundle` of the HDF5 or TDMS file at `path`, whatever schema version it was written with, as
     the latest schema version's (`icoschema.DatasetBundle`). A file of an older schema version is migrated by
     `icoschema.migrate` (for v1 -> v2: every channel becomes a `LinearConversion`, see there), so its conversions
