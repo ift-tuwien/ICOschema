@@ -13,7 +13,13 @@ import pytest
 from icoschema.v2 import DatasetBundle, LinearConversion, Recording
 from icoschema.v2.storage import tdms as tdms_storage
 
-from .tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter, TruncatedTimestamp
+from .tdms_writer import (
+    ChannelObject,
+    GroupObject,
+    RootObject,
+    TdmsWriter,
+    TruncatedTimestamp,
+)
 
 INCREMENT = 0.00010499790004199917
 START = datetime.datetime(2025, 4, 17, 14, 8, 29, 342295)
