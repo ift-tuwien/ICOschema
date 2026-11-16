@@ -13,7 +13,7 @@ import pytest
 from icoschema.v2 import DatasetBundle, LinearConversion, Recording
 from icoschema.v2.storage import tdms as tdms_storage
 
-from .tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter
+from .tdms_writer import ChannelObject, GroupObject, RootObject, TdmsWriter, TruncatedTimestamp
 
 INCREMENT = 0.00010499790004199917
 START = datetime.datetime(2025, 4, 17, 14, 8, 29, 342295)
@@ -316,3 +316,9 @@ def test_files_saved_with_the_old_tdms_json_still_report_rate_and_loss() -> None
     )
     assert source.channel_sampling_frequency() == (5000.0, "hardware")
     assert source.signal_loss_percentage == 2.5 and source.signal_loss_measured is True
+
+
+def test_a_start_time_written_just_below_a_microsecond_is_rounded_not_truncated(tmp_path: Path) -> None:
+    start = TruncatedTimestamp(2025, 4, 17, 14, 8, 29, 342295)
+    path = write(tmp_path / "t.tdms", [GroupObject("rawdata"), ChannelObject("rawdata", "c", np.zeros(5), waveform(wf_start_time=start))])
+    assert DatasetBundle.from_tdms(path).recording.recording_metadata.start_time == "2025-04-17T14:08:29.342295"

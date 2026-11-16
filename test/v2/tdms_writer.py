@@ -18,6 +18,10 @@ _STRUCT = {1: "b", 2: "h", 3: "i", 4: "q", 5: "B", 6: "H", 7: "I", 8: "Q", 9: "f
 _EPOCH = datetime.datetime(1904, 1, 1)
 
 
+class TruncatedTimestamp(datetime.datetime):
+    """A time written with its fraction truncated, so it reads back just below a whole microsecond."""
+
+
 def _string(text: str) -> bytes:
     raw = text.encode("utf-8")
     return struct.pack("<I", len(raw)) + raw
@@ -42,7 +46,10 @@ def _property(name: str, value: Any) -> bytes:
     if isinstance(value, datetime.datetime):
         delta = value - _EPOCH
         seconds, microseconds = delta.days * 86_400 + delta.seconds, delta.microseconds
-        fraction = ((microseconds << 64) + 999_999) // 1_000_000  # rounded up so that microseconds read back exactly
+        # rounded up so that microseconds read back exactly -- except for a `TruncatedTimestamp`, which is written
+        # the way other TDMS writers (e.g. nptdms) do: the fraction rounded down, one tick below the microsecond
+        round_up = 0 if isinstance(value, TruncatedTimestamp) else 999_999
+        fraction = ((microseconds << 64) + round_up) // 1_000_000
         return _string(name) + struct.pack("<IQq", 0x44, fraction, seconds)
     raise TypeError(f"cannot write a property of type {type(value).__name__}")
 

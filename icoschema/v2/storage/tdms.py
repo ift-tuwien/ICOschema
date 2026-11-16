@@ -204,7 +204,12 @@ def _read_channels(path: str, where: str, channels: list[Any]) -> _Read:
     start = channels[0].properties.get("wf_start_time")
     start_time = None
     if start is not None:
-        begin = start.to_datetime64("us") if hasattr(start, "to_datetime64") else np.datetime64(start, "us")
+        if hasattr(start, "to_datetime64"):
+            # tdmspy truncates; a TDMS timestamp's binary fraction rarely lands exactly on a microsecond (a time
+            # written as ...342295 us reads back as ...342294.99999 us), so round the exact ns value instead.
+            begin = (start.to_datetime64("ns") + np.timedelta64(500, "ns")).astype("datetime64[us]")
+        else:
+            begin = np.datetime64(start, "us")
         offset = channels[0].properties.get("wf_start_offset")
         if offset is not None and float(offset) != 0.0:
             begin = begin + np.timedelta64(round(float(offset) * 1e6), "us")
